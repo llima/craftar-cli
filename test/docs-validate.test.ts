@@ -44,6 +44,7 @@ const run = (root: string, o: Partial<Parameters<typeof validateDocs>[0]> = {}):
   validateDocs({ root, version: "test", fetch: false, strict: false, limit: null, configured: true, typedWorkspace: null, home: process.env.CRAFTAR_HOME, ...o });
 const findings = (r: DocsReport, id?: string) => r.checks.filter((c) => c.level !== "ok" && (id === undefined || c.id === id));
 const brief = (c: DocsCheck) => `${c.level} ${c.id} ${c.path}${c.line === null ? "" : `:${c.line}:${c.column}`} ${c.message}`;
+const T = (a: string, b: string) => a + b; // tags assembled at runtime (§4.5)
 
 describe("§4.3 links — each row", () => {
   it("a tree with nothing wrong: no warn, no error, one ok per always-on check and policy", async () => {
@@ -535,5 +536,34 @@ describe("§11 item 13 — writes nothing", () => {
     const before = await snapshot(s.root);
     await run(s.wsRoot);
     expect(await snapshot(s.root)).toEqual(before);
+  });
+});
+
+describe("spec 47 §6.3 — a code span's text enters the slug (links)", () => {
+  it("a link to #returns-resultt finds the heading with code span", async () => {
+    const s = await ws({ "docs/a.md": "# A\n\n## Returns `Result<T>`\n", "docs/b.md": "[x](a.md#returns-resultt)\n" });
+    expect(findings(await run(s.wsRoot), "links")).toEqual([]);
+  });
+  it("a link to #returns-result (wrong) does not find the heading", async () => {
+    const s = await ws({ "docs/a.md": "# A\n\n## Returns `Result<T>`\n", "docs/b.md": "[x](a.md#returns-result)\n" });
+    const f = findings(await run(s.wsRoot), "links");
+    expect(f).toHaveLength(1);
+    expect(brief(f[0])).toBe("warn links docs/b.md:1:5 fragment not found in the target");
+  });
+  it("CRLF line endings: a link to #returns-resultt finds the heading", async () => {
+    const s = await ws({ "docs/a.md": "# A\r\n\r\n## Returns `Result<T>`\r\n", "docs/b.md": "[x](a.md#returns-resultt)\r\n" });
+    expect(findings(await run(s.wsRoot), "links")).toEqual([]);
+  });
+});
+
+describe("spec 47 §4.5 — a line that is only a closing tag (leaked-tags)", () => {
+  const closeOf = (x: string) => T("</", x + ">");
+
+  it("content alone gives one finding", async () => {
+    const s = await ws({ "docs/a.md": "# A\n\ntext\n\n" + closeOf("content") + "\n" });
+    const f = findings(await run(s.wsRoot), "leaked-tags");
+    expect(f).toHaveLength(1);
+    expect(brief(f[0])).toBe("error leaked-tags docs/a.md:5:1 tool-call tag outside code (content)");
+    expect(f[0].fix).toBe("remove the leaked tag, or quote it in a code span");
   });
 });

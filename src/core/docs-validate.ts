@@ -45,16 +45,42 @@ export function declaredDocs(profile: { docs?: unknown }): DocsBlock | null {
  * The tool-call tags (spec 47 §4.5): data, each a name and the element names it matches, opening or closing, with an
  * optional `prefix:`. A finding names the entry, never the text matched. The names are assembled so that this file holds
  * no literal tool-call markup.
+ *
+ * Entries with `alone: true` are matched only as a line that is nothing but the closing tag (spaces or tabs around it
+ * allowed). An entry with `prefix: true` is a prefix: it matches the element name followed by any of `[:A-Za-z_.-]*`.
  */
-export const LEAKED_TAGS: ReadonlyArray<{ name: string; elements: string[] }> = [
+export const LEAKED_TAGS: ReadonlyArray<{ name: string; elements: string[]; alone?: true; prefix?: true }> = [
   { name: "function-calls", elements: [["function", "calls"].join("_")] },
   { name: "function-results", elements: [["function", "results"].join("_")] },
-  { name: "invoke", elements: [["in", "voke"].join("")] },
-  { name: "parameter", elements: [["para", "meter"].join("")] },
+  { name: ["in", "voke"].join(""), elements: [["in", "voke"].join("")] },
+  { name: ["para", "meter"].join(""), elements: [["para", "meter"].join("")] },
   { name: "tool-use", elements: [["tool", "use"].join("_"), ["tool", "result"].join("_")] },
+  { name: "content", elements: ["content"], alone: true },
+  { name: "thinking", elements: ["thinking"], alone: true },
+  { name: ["ant", "ml"].join(""), elements: [["ant", "ml"].join("")], alone: true, prefix: true },
 ];
-const TAG_ELEMENT = new Map(LEAKED_TAGS.flatMap((t) => t.elements.map((e) => [e, t.name] as const)));
+// Entries without alone: matched by TAG_RE anywhere
+const TAG_ENTRIES = LEAKED_TAGS.filter((t) => !t.alone);
+const TAG_ELEMENT = new Map(TAG_ENTRIES.flatMap((t) => t.elements.map((e) => [e, t.name] as const)));
 const TAG_RE = new RegExp(`</?(?:[A-Za-z]+:)?(${[...TAG_ELEMENT.keys()].join("|")})(?![A-Za-z0-9_-])`, "g");
+
+// Entries with alone: matched only as a line that is nothing but the closing tag
+const ALONE_ENTRIES = LEAKED_TAGS.filter((t) => t.alone);
+// The pattern: a closing tag of content, thinking, or an element the prefix entry starts.
+const alonePatternParts = ALONE_ENTRIES.map((t) => {
+  const escaped = t.elements[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return t.prefix ? `${escaped}[:A-Za-z_.-]*` : escaped;
+});
+const ALONE_RE = new RegExp(`^[ \\t]*</(${alonePatternParts.join("|")})>[ \\t]*$`);
+
+/** The entry name for a name ALONE_RE captured: an exact element, or a prefix element the name starts with. */
+function aloneName(captured: string): string | null {
+  for (const t of ALONE_ENTRIES) {
+    const element = t.elements[0];
+    if (t.prefix ? captured.startsWith(element) : captured === element) return t.name;
+  }
+  return null;
+}
 
 export interface ScannedLink {
   line: number;
@@ -101,14 +127,110 @@ function withoutClosingRun(text: string): string {
   return t[k - 1] === " " || t[k - 1] === "\t" ? t.slice(0, k).trimEnd() : t;
 }
 
-/** GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space and `-` dropped, spaces to `-`. */
+/** Positions after an unescaped backslash that escapes ASCII punctuation. */
+function escapes(s: string): Uint8Array {
+  const out = new Uint8Array(s.length + 1);
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && !out[i] && i + 1 < s.length && ASCII_PUNCT.test(s[i + 1])) out[i + 1] = 1;
+  }
+  return out;
+}
+
+/** A code span's range: start/end is the range `blankCode` blanks; contentStart/contentEnd is between the backtick runs. */
+export interface CodeSpanRange {
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+}
+
+/**
+ * Extracts the ranges of code spans from a string using the same backtick-run pairing logic as `blankCode`:
+ * escape-aware, equal-length runs, forward-only pointer per length — linear time.
+ */
+export function codeSpanRanges(s: string): CodeSpanRange[] {
+  const esc = escapes(s);
+  // A backslash escapes only an opening backtick: inside a span it is literal, so a run keeps its full length as a closer.
+  const runs: Array<{ start: number; len: number; escaped: boolean }> = [];
+  for (let i = 0; i < s.length; ) {
+    if (s[i] !== "`") {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < s.length && s[j] === "`") j++;
+    runs.push({ start: i, len: j - i, escaped: esc[i] === 1 });
+    i = j;
+  }
+  const byLen = new Map<number, number[]>();
+  runs.forEach((r, idx) => (byLen.get(r.len) ?? byLen.set(r.len, []).get(r.len)!).push(idx));
+  const pointer = new Map<number, number>();
+  const ranges: CodeSpanRange[] = [];
+  for (let idx = 0; idx < runs.length; idx++) {
+    const r = runs[idx];
+    // An escaped first backtick is literal; the rest of the run can still open.
+    const len = r.escaped ? r.len - 1 : r.len;
+    const start = r.escaped ? r.start + 1 : r.start;
+    const list = byLen.get(len);
+    if (len === 0 || !list) continue;
+    let p = pointer.get(len) ?? 0;
+    while (p < list.length && list[p] <= idx) p++;
+    pointer.set(len, p);
+    if (p >= list.length) continue;
+    const close = runs[list[p]];
+    ranges.push({ start, end: close.start + close.len, contentStart: start + len, contentEnd: close.start });
+    idx = list[p];
+  }
+  return ranges;
+}
+
+/**
+ * GitHub's heading slug (github-slugger's rule): lower case, characters other than letters, marks, numbers, `_`, space
+ * and `-` dropped, spaces to `-`. A code span's content enters literally (newlines as spaces, CommonMark edge-space
+ * stripping applied); the link and HTML strips run over the text with each code span masked by a token, so they never
+ * match across a span, and the spans are restored before the slug's own rule.
+ */
 export function githubSlug(text: string): string {
-  const visible = text
-    // Each class excludes its own opener, so a failed attempt stops at the next one: linear on a run of openers.
+  // Drop the two token delimiters first: the punctuation rule would drop them anyway, so the output does not change.
+  const input = text.replace(/[\uE000\uE001]/g, "");
+
+  // Mask each code span by a token U+E000 <index> U+E001, keeping its processed content aside.
+  const ranges = codeSpanRanges(input);
+  const contents: string[] = [];
+  const parts: string[] = [];
+  let at = 0;
+  for (const r of ranges) {
+    parts.push(input.slice(at, r.start));
+    let content = input.slice(r.contentStart, r.contentEnd).replace(/\n/g, " ");
+    // CommonMark: if content both begins and ends with a space, and is not all spaces, strip one space from each end.
+    if (content.length >= 2 && content[0] === " " && content[content.length - 1] === " " && content.trim() !== "") {
+      content = content.slice(1, -1);
+    }
+    parts.push(`\uE000${contents.length}\uE001`);
+    contents.push(content);
+    at = r.end;
+  }
+  parts.push(input.slice(at));
+  const masked = parts.join("");
+
+  // Over the masked text: drop a backslash-escaped <>[]() with its backslash, then the link and HTML strips.
+  const esc = escapes(masked);
+  let cleaned = "";
+  for (let i = 0; i < masked.length; i++) {
+    if (esc[i + 1] && "<>[]()".includes(masked[i + 1])) {
+      i++;
+      continue;
+    }
+    cleaned += masked[i];
+  }
+  const stripped = cleaned
     .replace(/\[([^[\]]*)\]\([^()]*\)/g, "$1")
-    .replace(/<[^<>]*>/g, "")
-    .trim()
-    .toLowerCase();
+    .replace(/<[^<>]*>/g, "");
+
+  // Restore each span's content in place of its token.
+  const restored = stripped.replace(/\uE000(\d+)\uE001/g, (_m, n) => contents[Number(n)]);
+
+  const visible = restored.trim().toLowerCase();
   return visible.replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "").replace(/ /g, "-");
 }
 
@@ -129,60 +251,20 @@ class Slugger {
   }
 }
 
-/** Positions after an unescaped backslash that escapes ASCII punctuation. */
-function escapes(s: string): Uint8Array {
-  const out = new Uint8Array(s.length + 1);
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === "\\" && !out[i] && i + 1 < s.length && ASCII_PUNCT.test(s[i + 1])) out[i + 1] = 1;
-  }
-  return out;
-}
-
 /**
  * The paragraph with its code spans, inline HTML comments and inline `<code>` elements blanked (newlines kept), so that
  * no later pass sees them. Code spans pair backtick runs of equal length (CommonMark): each length keeps a forward-only
  * pointer into its runs, so a paragraph of unmatched runs is read once — linear time (§6.2).
  */
 export function blankCode(s: string): string {
-  const esc = escapes(s);
-  // A backslash escapes only an opening backtick: inside a span it is literal, so a run keeps its full length as a closer.
-  const runs: Array<{ start: number; len: number; escaped: boolean }> = [];
-  for (let i = 0; i < s.length; ) {
-    if (s[i] !== "`") {
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j < s.length && s[j] === "`") j++;
-    runs.push({ start: i, len: j - i, escaped: esc[i] === 1 });
-    i = j;
-  }
-  const byLen = new Map<number, number[]>();
-  runs.forEach((r, idx) => (byLen.get(r.len) ?? byLen.set(r.len, []).get(r.len)!).push(idx));
-  const pointer = new Map<number, number>();
-  const ranges: Array<[number, number]> = [];
-  for (let idx = 0; idx < runs.length; idx++) {
-    const r = runs[idx];
-    // An escaped first backtick is literal; the rest of the run can still open.
-    const len = r.escaped ? r.len - 1 : r.len;
-    const start = r.escaped ? r.start + 1 : r.start;
-    const list = byLen.get(len);
-    if (len === 0 || !list) continue;
-    let p = pointer.get(len) ?? 0;
-    while (p < list.length && list[p] <= idx) p++;
-    pointer.set(len, p);
-    if (p >= list.length) continue;
-    const close = runs[list[p]];
-    ranges.push([start, close.start + close.len]);
-    idx = list[p];
-  }
+  const ranges = codeSpanRanges(s);
   const blank = (from: number, to: number, out: string[]) => out.push(s.slice(from, to).replace(/[^\n]/g, " "));
   const parts: string[] = [];
   let at = 0;
-  for (const [a, b] of ranges) {
-    parts.push(s.slice(at, a));
-    blank(a, b, parts);
-    at = b;
+  for (const r of ranges) {
+    parts.push(s.slice(at, r.start));
+    blank(r.start, r.end, parts);
+    at = r.end;
   }
   parts.push(s.slice(at));
   let out = parts.join("");
@@ -228,11 +310,46 @@ function nextWhere(s: string, test: (c: string) => boolean): Int32Array {
 
 const isWs = (c: string) => c === " " || c === "\t" || c === "\n";
 
-/** Every link, anchor and tag of one paragraph (code already blanked). */
-function scanParagraph(s: string, at: (pos: number) => { line: number; column: number }, scan: Scan): void {
+/**
+ * Every link, anchor and tag of one paragraph. `s` is the paragraph with code blanked; `raw` is the same text unblanked,
+ * and `col0` gives, per line, how many characters (a quote, list or heading marker) were cut before that line's text.
+ */
+function scanParagraph(
+  s: string,
+  raw: string,
+  col0: number[],
+  at: (pos: number) => { line: number; column: number },
+  scan: Scan,
+): void {
   const esc = escapes(s);
 
-  for (const m of s.matchAll(TAG_RE)) scan.tags.push({ name: TAG_ELEMENT.get(m[1])!, ...at(m.index!) });
+  // TAG_RE hits: collect positions for deduplication with ALONE_RE
+  const tagHitPositions = new Set<number>();
+  for (const m of s.matchAll(TAG_RE)) {
+    scan.tags.push({ name: TAG_ELEMENT.get(m[1])!, ...at(m.index!) });
+    tagHitPositions.add(m.index!);
+  }
+
+  // ALONE_RE: a line that, as written in the file, is nothing but a closing content/thinking/antml tag. It is decided on
+  // the unblanked line (`raw`), and only when nothing — a code or comment range, or a quote/list/heading marker — touched
+  // it: the blanked line equals the unblanked one, and the line's col0 is 0.
+  const rawLines = raw.split("\n");
+  const blankedLines = s.split("\n");
+  let aloneLineStart = 0;
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    const aloneMatch = ALONE_RE.exec(line);
+    if (aloneMatch && col0[i] === 0 && blankedLines[i] === line) {
+      // A line matching ALONE_RE that also has a TAG_RE hit holds it at the `<` of this closing tag (e.g. antml:invoke),
+      // so testing that one position stays linear — TAG_RE already pushed it, so it is not counted twice.
+      const ltPos = line.indexOf("</");
+      if (!tagHitPositions.has(aloneLineStart + ltPos)) {
+        const name = aloneName(aloneMatch[1]);
+        if (name) scan.tags.push({ name, ...at(aloneLineStart + ltPos) });
+      }
+    }
+    aloneLineStart += line.length + 1;
+  }
 
   // Parentheses paired once over the paragraph, so a destination's close is found without rescanning.
   const matchParen = new Int32Array(s.length).fill(-1);
@@ -405,7 +522,7 @@ export function scanMarkdown(input: string): Scan {
     const blanked = blankCode(joined);
     // GitHub slugs a heading from its rendered text, so a code span's content counts there.
     if (heading) slugger.add(joined.replace(/\n/g, " "));
-    scanParagraph(blanked, at, scan);
+    scanParagraph(blanked, joined, lines.map((l) => l.col0), at, scan);
   };
 
   for (let i = first; i < all.length; i++) {

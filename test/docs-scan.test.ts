@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEAKED_TAGS, blankCode, githubSlug, readTarget, scanMarkdown } from "../src/core/docs-validate.js";
+import { LEAKED_TAGS, blankCode, codeSpanRanges, githubSlug, readTarget, scanMarkdown } from "../src/core/docs-validate.js";
 
 // Spec 47 §6 — the scanner: what it reads as a link, what it leaves as code, and in what time.
 
@@ -288,6 +288,16 @@ describe("§11 item 4 — a pathological file finishes in linear time", () => {
     scanMarkdown("[](".repeat((1 << 20) / 3));
     expect(Date.now() - t0).toBeLessThan(10_000);
   });
+  it("300 000 lone closing tags in one paragraph", () => {
+    const N = 300_000;
+    const lines: string[] = [];
+    for (let i = 0; i < N; i++) lines.push(i % 2 === 0 ? T("</", T("in", "voke") + ">") : T("</", "content>"));
+    const text = lines.join("\n");
+    const t0 = Date.now();
+    const s = scanMarkdown(text);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(s.tags.length).toBe(N);
+  });
 });
 
 describe("§6.2 — a pathological heading finishes in linear time (review round 1)", () => {
@@ -302,5 +312,158 @@ describe("§6.2 — a pathological heading finishes in linear time (review round
     const t0 = Date.now();
     scanMarkdown(text);
     expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+});
+
+describe("spec 47 §6.3 — a code span's text enters the slug", () => {
+  it("a heading with a `Result<T>` code span gives returns-resultt", () => {
+    expect(githubSlug("2026-01-02 — Acme API returns `Result<T>` (PR #7)")).toBe("2026-01-02--acme-api-returns-resultt-pr-7");
+  });
+  it("a code span holding `Acme.<Module>.Tools` enters the slug literally", () => {
+    expect(githubSlug("Optional layer — `Acme.<Module>.Tools`")).toBe("optional-layer--acmemoduletools");
+  });
+  it("Foo <b>bar</b> gives foo-bar — HTML outside code still dropped (guard, passes on HEAD)", () => {
+    expect(githubSlug("Foo <b>bar</b>")).toBe("foo-bar");
+  });
+  it("Use `[a](b)` here gives use-ab-here — link syntax in code span is literal", () => {
+    expect(githubSlug("Use `[a](b)` here")).toBe("use-ab-here");
+  });
+  it("Odd `Result<T> here gives odd-result-here — unclosed backtick is no span (guard, passes on HEAD)", () => {
+    expect(githubSlug("Odd `Result<T> here")).toBe("odd-result-here");
+  });
+  it("Escaped \\<T\\> type gives escaped-t-type — backslash-escaped brackets outside code drop", () => {
+    expect(githubSlug("Escaped \\<T\\> type")).toBe("escaped-t-type");
+  });
+  it("Pad `` `x` `` end gives pad-x-end — double-backtick span with padding spaces", () => {
+    expect(githubSlug("Pad `` `x` `` end")).toBe("pad-x-end");
+  });
+  it("scanMarkdown returns-resultt anchors for duplicate headings", () => {
+    const s = scanMarkdown("## Returns `Result<T>`\n\n## Returns `Result<T>`\n");
+    expect([...s.anchors]).toContain("returns-resultt");
+    expect([...s.anchors]).toContain("returns-resultt-1");
+    expect([...s.anchors]).not.toContain("returns-result");
+  });
+  it("codeSpanRanges extracts ranges correctly", () => {
+    expect(codeSpanRanges("a `b` c ``d`` e")).toEqual([
+      { start: 2, end: 5, contentStart: 3, contentEnd: 4 },
+      { start: 8, end: 13, contentStart: 10, contentEnd: 11 },
+    ]);
+  });
+  it("an escaped _ is kept (GitHub keeps it)", () => {
+    expect(githubSlug("Use \\_private here")).toBe("use-_private-here");
+  });
+  it("an escaped - is kept (GitHub keeps it)", () => {
+    expect(githubSlug("A \\- B")).toBe("a---b");
+  });
+  it("two backslashes then a real <b> tag: the < is not escaped, the tag is HTML", () => {
+    expect(githubSlug("Path \\\\<b>x</b>")).toBe("path-x");
+  });
+  it("a link whose text is a code span: the strip does not match across the span", () => {
+    expect(githubSlug("[`a`](b)")).toBe("a");
+  });
+  it("a link with a code span inside running text", () => {
+    expect(githubSlug("Use [`craftar sync`](https://x.y/z) now")).toBe("use-craftar-sync-now");
+  });
+  it("an HTML tag whose attribute holds a code span", () => {
+    expect(githubSlug('<a id="`x`">t</a>')).toBe("t");
+  });
+  it("plain words with no code span", () => {
+    expect(githubSlug("A x b")).toBe("a-x-b");
+  });
+});
+
+describe("spec 47 §4.5 — a line that is only a closing tag", () => {
+  const closeOf = (x: string) => T("</", x + ">");
+
+  it("content alone gives one hit", () => {
+    expect(scanMarkdown("text\n\n" + closeOf("content") + "\n").tags).toEqual([{ name: "content", line: 3, column: 1 }]);
+  });
+  it("thinking alone gives one hit", () => {
+    expect(scanMarkdown("text\n\n" + closeOf("thinking") + "\n").tags).toEqual([{ name: "thinking", line: 3, column: 1 }]);
+  });
+  it(["ant", "ml"].join("") + ":foo alone gives one hit, name " + ["ant", "ml"].join(""), () => {
+    expect(scanMarkdown("  " + T("</", T("ant", "ml") + ":foo>") + "\t").tags).toEqual([{ name: ["ant", "ml"].join(""), line: 1, column: 3 }]);
+  });
+  it(["ant", "ml"].join("") + ":invoke alone gives exactly one hit, name invoke (no double)", () => {
+    const s = scanMarkdown(T("</", T("ant", "ml") + ":" + T("in", "voke") + ">"));
+    expect(s.tags).toHaveLength(1);
+    expect(s.tags[0].name).toBe(T("in", "voke"));
+  });
+  it("the pair: invoke line 2, content line 3", () => {
+    const s = scanMarkdown("x\n" + T("</", T("in", "voke") + ">") + "\n" + closeOf("content") + "\n");
+    expect(s.tags).toEqual([
+      { name: T("in", "voke"), line: 2, column: 1 },
+      { name: "content", line: 3, column: 1 },
+    ]);
+  });
+  it("CRLF: content on line 3", () => {
+    expect(scanMarkdown("x\r\n\r\n" + closeOf("content") + "\r\n").tags).toEqual([{ name: "content", line: 3, column: 1 }]);
+  });
+  it("file ends with the tag and no newline", () => {
+    expect(scanMarkdown("x\n\n" + closeOf("content")).tags).toEqual([{ name: "content", line: 3, column: 1 }]);
+  });
+  it("not flagged: text before and after", () => {
+    expect(scanMarkdown("text " + closeOf("content") + " more").tags).toEqual([]);
+  });
+  it("not flagged: opening content alone", () => {
+    expect(scanMarkdown(T("<", "content>")).tags).toEqual([]);
+  });
+  it("not flagged: contents (wrong name)", () => {
+    expect(scanMarkdown(closeOf("contents")).tags).toEqual([]);
+  });
+  it("not flagged: Content (case)", () => {
+    expect(scanMarkdown(closeOf("Content")).tags).toEqual([]);
+  });
+  it("not flagged: content inside a fence", () => {
+    expect(scanMarkdown("```\n" + closeOf("content") + "\n```\n").tags).toEqual([]);
+  });
+  it("not flagged: content inside a code span", () => {
+    expect(scanMarkdown("`" + closeOf("content") + "`").tags).toEqual([]);
+  });
+  it("not flagged: content inside an HTML comment", () => {
+    expect(scanMarkdown("<!-- " + closeOf("content") + " -->").tags).toEqual([]);
+  });
+  it("not flagged: content as indented code (4 spaces after blank)", () => {
+    expect(scanMarkdown("text\n\n    " + closeOf("content") + "\n").tags).toEqual([]);
+  });
+  it("not flagged: alone decided on the line as written — a code span then the tag", () => {
+    expect(scanMarkdown("`x` " + closeOf("content")).tags).toEqual([]);
+  });
+  it("not flagged: an HTML comment then the tag on one line", () => {
+    expect(scanMarkdown("<!-- c --> " + closeOf("thinking")).tags).toEqual([]);
+  });
+  it("not flagged: a <code> element then the tag on one line (no content hit)", () => {
+    const s = scanMarkdown(T("<", "code>y") + T("</", "code>") + " " + closeOf("content"));
+    expect(s.tags.filter((t) => t.name === "content")).toEqual([]);
+  });
+  it("not flagged: a list item whose content is the tag", () => {
+    expect(scanMarkdown("- " + closeOf("content")).tags).toEqual([]);
+  });
+  it("not flagged: a quote whose content is the tag", () => {
+    expect(scanMarkdown("> " + closeOf("thinking")).tags).toEqual([]);
+  });
+  it("not flagged: a heading whose text is the tag", () => {
+    expect(scanMarkdown("# " + closeOf("content")).tags).toEqual([]);
+  });
+  it("guard: a lazy line in a paragraph (col0 0) still gives one hit", () => {
+    expect(scanMarkdown("x\n" + closeOf("content")).tags).toEqual([{ name: "content", line: 2, column: 1 }]);
+  });
+  it("guard: two leading spaces (not indented code) still gives one hit", () => {
+    expect(scanMarkdown("text\n\n  " + closeOf("content")).tags).toEqual([{ name: "content", line: 3, column: 3 }]);
+  });
+  it("guard: the text line of a setext heading, written alone, mirrors the grep and gives one hit", () => {
+    expect(scanMarkdown(closeOf("content") + "\n---\n").tags).toEqual([{ name: "content", line: 1, column: 1 }]);
+  });
+  it.each([
+    [T("in", "voke"), T("in", "voke"), "already caught"],
+    [T("para", "meter"), T("para", "meter"), "already caught"],
+    [T("function", "_calls"), "function-calls", "already caught"],
+    ["content", "content", "new"],
+    ["thinking", "thinking", "new"],
+    [T("ant", "ml") + ":x", T("ant", "ml"), "new"],
+  ])("table: %s closing tag alone → name %s (%s)", (element, expectedName, _status) => {
+    const s = scanMarkdown(closeOf(element));
+    expect(s.tags).toHaveLength(1);
+    expect(s.tags[0].name).toBe(expectedName);
   });
 });
