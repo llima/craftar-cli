@@ -1477,8 +1477,10 @@ async function declaredChecks(
 const CITED_MAX_LENGTH = 4096;
 /** A character of a cited path's run (spec 58 §5.5). */
 const CITED_PATH_CHAR = /[A-Za-z0-9._@+/-]/;
-/** What makes a whitespace-delimited word no candidate: a placeholder, a glob or a URL (spec 58 §5.5). */
-const CITED_PLACEHOLDER = /[<>*{}$]|…|\.\.\.|:\/\//;
+/** Non-asterisk placeholders to reject before emphasis stripping: angle brackets, curlies, $, ellipsis, URL schemes. */
+const CITED_EARLY_REJECT = /[<>{}$]|…|\.\.\.|:\/\//;
+/** A glob asterisk inside the stripped word (not at start/end, which would be emphasis). */
+const CITED_INTERIOR_GLOB = /(?!^)\*(?!$)/;
 /** Spec 58 §5.5: the closed list of file suffixes a cited path may end with. */
 const CITED_SUFFIXES = [".md", ".yaml", ".yml", ".json", ".sh", ".ps1", ".ts", ".js", ".mjs", ".txt", ".toml"];
 
@@ -1542,6 +1544,9 @@ function collectCitedPaths(
     const ws = i;
     while (i < n && read[i] && !isWs(joined[i])) i++;
     const we = i;
+    // R2-S2: Check non-glob placeholders BEFORE stripping — <docs/x.md> is rejected early.
+    const word = joined.slice(ws, we);
+    if (word === "" || CITED_EARLY_REJECT.test(word)) continue;
     // Strip trailing punctuation before emphasis so **docs/x.md**. works.
     let s0 = ws;
     let s1 = we;
@@ -1549,7 +1554,8 @@ function collectCitedPaths(
     while (s0 < s1 && joined[s0] === "*") s0++;
     while (s1 > s0 && joined[s1 - 1] === "*") s1--;
     const stripped = joined.slice(s0, s1);
-    if (stripped === "" || CITED_PLACEHOLDER.test(stripped)) continue;
+    // R2-S2: Interior glob asterisks (like docs/*.md) are rejected after stripping.
+    if (stripped === "" || CITED_INTERIOR_GLOB.test(stripped)) continue;
     // Each maximal run of path characters in the word is read.
     for (let r = 0; r < stripped.length; ) {
       if (!CITED_PATH_CHAR.test(stripped[r])) {

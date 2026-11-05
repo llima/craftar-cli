@@ -569,6 +569,16 @@ exec "${realGit}" "$@"
     expect(log).not.toContain("docs/lnk/z.md");
     expect(log).not.toContain("docs/LNK/z.md");
   });
+
+  it("R2-S2: placeholder check happens before emphasis stripping — *docs/* is a glob, not cited", async () => {
+    // A word like *docs/* has * inside (glob pattern); the placeholder check must happen
+    // before stripping emphasis asterisks, or it would become docs/ and be read as a path prefix.
+    const body = '*docs/*\n';
+    const s = await ws({ '.claude/rules/a.md': body, 'docs/x.md': 'x\n' }, BLOCK);
+    const r = await run(s.wsRoot);
+    // *docs/* is a glob → no cited paths, no errors
+    expect(findings(r, 'cited')).toEqual([]);
+  });
 });
 
 describe("spec 58 §6 — the cited id's place", () => {
