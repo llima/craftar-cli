@@ -45,16 +45,35 @@ export function declaredDocs(profile: { docs?: unknown }): DocsBlock | null {
  * The tool-call tags (spec 47 §4.5): data, each a name and the element names it matches, opening or closing, with an
  * optional `prefix:`. A finding names the entry, never the text matched. The names are assembled so that this file holds
  * no literal tool-call markup.
+ *
+ * Entries with `alone: true` are matched only as a line that is nothing but the closing tag (spaces or tabs around it
+ * allowed). An entry with `prefix: true` is a prefix: it matches the element name followed by any of `[:A-Za-z_.-]*`.
  */
-export const LEAKED_TAGS: ReadonlyArray<{ name: string; elements: string[] }> = [
+export const LEAKED_TAGS: ReadonlyArray<{ name: string; elements: string[]; alone?: true; prefix?: true }> = [
   { name: "function-calls", elements: [["function", "calls"].join("_")] },
   { name: "function-results", elements: [["function", "results"].join("_")] },
-  { name: "invoke", elements: [["in", "voke"].join("")] },
-  { name: "parameter", elements: [["para", "meter"].join("")] },
+  { name: ["in", "voke"].join(""), elements: [["in", "voke"].join("")] },
+  { name: ["para", "meter"].join(""), elements: [["para", "meter"].join("")] },
   { name: "tool-use", elements: [["tool", "use"].join("_"), ["tool", "result"].join("_")] },
+  { name: "content", elements: ["content"], alone: true },
+  { name: "thinking", elements: ["thinking"], alone: true },
+  { name: ["ant", "ml"].join(""), elements: [["ant", "ml"].join("")], alone: true, prefix: true },
 ];
-const TAG_ELEMENT = new Map(LEAKED_TAGS.flatMap((t) => t.elements.map((e) => [e, t.name] as const)));
+// Entries without alone: matched by TAG_RE anywhere
+const TAG_ENTRIES = LEAKED_TAGS.filter((t) => !t.alone);
+const TAG_ELEMENT = new Map(TAG_ENTRIES.flatMap((t) => t.elements.map((e) => [e, t.name] as const)));
 const TAG_RE = new RegExp(`</?(?:[A-Za-z]+:)?(${[...TAG_ELEMENT.keys()].join("|")})(?![A-Za-z0-9_-])`, "g");
+
+// Entries with alone: matched only as a line that is nothing but the closing tag
+const ALONE_ENTRIES = LEAKED_TAGS.filter((t) => t.alone);
+// Build the pattern: </content> or </thinking> or </antml[:A-Za-z_.-]*>
+const alonePatternParts = ALONE_ENTRIES.map((t) => {
+  const escaped = t.elements[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return t.prefix ? `${escaped}[:A-Za-z_.-]*` : escaped;
+});
+const ALONE_RE = new RegExp(`^[ \\t]*</(${alonePatternParts.join("|")})>[ \\t]*$`);
+// Map from matched element (or prefix) to entry name, for alone entries
+const ALONE_ELEMENT = new Map(ALONE_ENTRIES.map((t) => [t.elements[0], t] as const));
 
 export interface ScannedLink {
   line: number;
@@ -287,7 +306,61 @@ const isWs = (c: string) => c === " " || c === "\t" || c === "\n";
 function scanParagraph(s: string, at: (pos: number) => { line: number; column: number }, scan: Scan): void {
   const esc = escapes(s);
 
-  for (const m of s.matchAll(TAG_RE)) scan.tags.push({ name: TAG_ELEMENT.get(m[1])!, ...at(m.index!) });
+  // TAG_RE hits: collect positions for deduplication with ALONE_RE
+  const tagHitPositions = new Set<number>();
+  for (const m of s.matchAll(TAG_RE)) {
+    scan.tags.push({ name: TAG_ELEMENT.get(m[1])!, ...at(m.index!) });
+    tagHitPositions.add(m.index!);
+  }
+
+  // ALONE_RE: check each line for a closing tag that is the line's only content
+  let aloneLineStart = 0;
+  for (const line of s.split("\n")) {
+    const aloneMatch = ALONE_RE.exec(line);
+    if (aloneMatch) {
+      // Check if any TAG_RE hit lies on this line
+      const lineEnd = aloneLineStart + line.length;
+      let hasTagHitOnLine = false;
+      for (const pos of tagHitPositions) {
+        if (pos >= aloneLineStart && pos < lineEnd) {
+          hasTagHitOnLine = true;
+          break;
+        }
+      }
+      if (!hasTagHitOnLine) {
+        // Find the entry by matching the captured element
+        const matchedElement = aloneMatch[1];
+        let entryName: string | null = null;
+        for (const [prefix, entry] of ALONE_ELEMENT) {
+          if (entry.prefix) {
+            // Prefix match: element starts with the prefix
+            if (matchedElement === prefix || matchedElement.startsWith(prefix + ":") || /^[:A-Za-z_.-]/.test(matchedElement.slice(prefix.length))) {
+              // Check if it's a more specific TAG_RE element (like antml:invoke → invoke)
+              const afterPrefix = matchedElement.slice(prefix.length);
+              if (afterPrefix.startsWith(":")) {
+                const specificElement = afterPrefix.slice(1);
+                if (TAG_ELEMENT.has(specificElement)) {
+                  entryName = TAG_ELEMENT.get(specificElement)!;
+                  break;
+                }
+              }
+              entryName = entry.name;
+              break;
+            }
+          } else if (matchedElement === prefix) {
+            entryName = entry.name;
+            break;
+          }
+        }
+        if (entryName) {
+          // Column is where the '<' appears in the line
+          const ltPos = line.indexOf("</");
+          scan.tags.push({ name: entryName, ...at(aloneLineStart + ltPos) });
+        }
+      }
+    }
+    aloneLineStart += line.length + 1;
+  }
 
   // Parentheses paired once over the paragraph, so a destination's close is found without rescanning.
   const matchParen = new Int32Array(s.length).fill(-1);

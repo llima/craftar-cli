@@ -340,3 +340,71 @@ describe("request 10 — a code span's text enters the slug", () => {
     ]);
   });
 });
+
+describe("request 10 — a line that is only a closing tag", () => {
+  const closeOf = (x: string) => T("</", x + ">");
+
+  it("content alone gives one hit", () => {
+    expect(scanMarkdown("text\n\n" + closeOf("content") + "\n").tags).toEqual([{ name: "content", line: 3, column: 1 }]);
+  });
+  it("thinking alone gives one hit", () => {
+    expect(scanMarkdown("text\n\n" + closeOf("thinking") + "\n").tags).toEqual([{ name: "thinking", line: 3, column: 1 }]);
+  });
+  it(["ant", "ml"].join("") + ":foo alone gives one hit, name " + ["ant", "ml"].join(""), () => {
+    expect(scanMarkdown("  " + T("</", T("ant", "ml") + ":foo>") + "\t").tags).toEqual([{ name: ["ant", "ml"].join(""), line: 1, column: 3 }]);
+  });
+  it(["ant", "ml"].join("") + ":invoke alone gives exactly one hit, name invoke (no double)", () => {
+    const s = scanMarkdown(T("</", T("ant", "ml") + ":" + T("in", "voke") + ">"));
+    expect(s.tags).toHaveLength(1);
+    expect(s.tags[0].name).toBe(T("in", "voke"));
+  });
+  it("the pair: invoke line 2, content line 3", () => {
+    const s = scanMarkdown("x\n" + T("</", T("in", "voke") + ">") + "\n" + closeOf("content") + "\n");
+    expect(s.tags).toEqual([
+      { name: T("in", "voke"), line: 2, column: 1 },
+      { name: "content", line: 3, column: 1 },
+    ]);
+  });
+  it("CRLF: content on line 3", () => {
+    expect(scanMarkdown("x\r\n\r\n" + closeOf("content") + "\r\n").tags).toEqual([{ name: "content", line: 3, column: 1 }]);
+  });
+  it("file ends with the tag and no newline", () => {
+    expect(scanMarkdown("x\n\n" + closeOf("content")).tags).toEqual([{ name: "content", line: 3, column: 1 }]);
+  });
+  it("not flagged: text before and after", () => {
+    expect(scanMarkdown("text " + closeOf("content") + " more").tags).toEqual([]);
+  });
+  it("not flagged: opening content alone", () => {
+    expect(scanMarkdown(T("<", "content>")).tags).toEqual([]);
+  });
+  it("not flagged: contents (wrong name)", () => {
+    expect(scanMarkdown(closeOf("contents")).tags).toEqual([]);
+  });
+  it("not flagged: Content (case)", () => {
+    expect(scanMarkdown(closeOf("Content")).tags).toEqual([]);
+  });
+  it("not flagged: content inside a fence", () => {
+    expect(scanMarkdown("```\n" + closeOf("content") + "\n```\n").tags).toEqual([]);
+  });
+  it("not flagged: content inside a code span", () => {
+    expect(scanMarkdown("`" + closeOf("content") + "`").tags).toEqual([]);
+  });
+  it("not flagged: content inside an HTML comment", () => {
+    expect(scanMarkdown("<!-- " + closeOf("content") + " -->").tags).toEqual([]);
+  });
+  it("not flagged: content as indented code (4 spaces after blank)", () => {
+    expect(scanMarkdown("text\n\n    " + closeOf("content") + "\n").tags).toEqual([]);
+  });
+  it.each([
+    [T("in", "voke"), T("in", "voke"), "already caught"],
+    [T("para", "meter"), T("para", "meter"), "already caught"],
+    [T("function", "_calls"), "function-calls", "already caught"],
+    ["content", "content", "new"],
+    ["thinking", "thinking", "new"],
+    [T("ant", "ml") + ":x", T("ant", "ml"), "new"],
+  ])("table: %s closing tag alone → name %s (%s)", (element, expectedName, _status) => {
+    const s = scanMarkdown(closeOf(element));
+    expect(s.tags).toHaveLength(1);
+    expect(s.tags[0].name).toBe(expectedName);
+  });
+});

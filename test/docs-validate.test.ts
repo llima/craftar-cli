@@ -554,3 +554,18 @@ describe("request 10 — a code span's text enters the slug (links)", () => {
     expect(findings(await run(s.wsRoot), "links")).toEqual([]);
   });
 });
+
+
+const T = (a: string, b: string) => a + b;
+
+describe("request 10 — a line that is only a closing tag (leaked-tags)", () => {
+  const closeOf = (x: string) => T("</", x + ">");
+
+  it("content alone gives one finding", async () => {
+    const s = await ws({ "docs/a.md": "# A\n\ntext\n\n" + closeOf("content") + "\n" });
+    const f = findings(await run(s.wsRoot), "leaked-tags");
+    expect(f).toHaveLength(1);
+    expect(brief(f[0])).toBe("error leaked-tags docs/a.md:5:1 tool-call tag outside code (content)");
+    expect(f[0].fix).toBe("remove the leaked tag, or quote it in a code span");
+  });
+});
