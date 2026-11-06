@@ -1,6 +1,7 @@
 import { NO_LISTS, type ListContext } from "./list-params.js";
-import { FORGE_SCHEMA_TARGET_SECTIONS, FORGE_SCHEMA_NATIVE_TARGETS, SECTION_NAME, TARGETS, LEGACY_TARGETS, type Owner, type Target, isLegacyTarget } from "../schema/index.js";
+import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, LEGACY_TARGETS, type Owner, type Target, isLegacyTarget } from "../schema/index.js";
 import { FORGE_MANIFEST } from "./forge.js";
+import { nativeTargetNearMiss } from "./native-targets.js";
 import { substitute } from "./resolve.js";
 import { placeholders } from "./extract.js";
 import { stripBom, toLf } from "./text.js";
@@ -97,7 +98,7 @@ function validateTargets(name: string, value: string, allowNativeTargets: boolea
     // Below the gate, check if it's a known native target (near miss)
     if (!allowNativeTargets && !isLegacyTarget(part) && (TARGETS as readonly string[]).includes(part)) {
       // It's a native target like "cursor" but below the schema gate
-      return `section ${name} targets=: ${part} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in ${FORGE_MANIFEST}`;
+      return nativeTargetNearMiss(null, `section ${name} targets=`, part);
     }
     if (!(allowed as readonly string[]).includes(part)) return errorMsg;
     if (seen.has(part)) return errorMsg;

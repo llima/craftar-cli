@@ -28,13 +28,14 @@ export function readsNativeTargets(manifest: { schema: number }): boolean {
  * Used by `loadForge` (key: `targets`) and section pass (key: `section <name> targets=`)
  * to produce consistent error messages.
  *
- * @param file - The file where the target was found (Forge-relative path)
+ * @param file - The file where the target was found (Forge-relative path), or null to omit the file prefix
  * @param key - The context key (e.g. "targets" or "section tone targets=")
  * @param target - The native target that was found
  * @returns The error message to display
  */
-export function nativeTargetNearMiss(file: string, key: string, target: string): string {
-  return `${file}: ${key}: ${target} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in craftar.forge.yaml`;
+export function nativeTargetNearMiss(file: string | null, key: string, target: string): string {
+  const prefix = file ? `${file}: ` : "";
+  return `${prefix}${key}: ${target} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in craftar.forge.yaml`;
 }
 
 /**
