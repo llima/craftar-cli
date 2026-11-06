@@ -601,7 +601,7 @@ export function oneLine(e: unknown): string {
 
 /**
  * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file, substituted], in plan order.
- * A target with no entry in MCP_FILE (agents-md) is skipped.
+ * A target with no entry in MCP_FILE (agents-md, agent-skills, codex) is skipped.
  * At schema 4, the server is rendered first, and its substituted leaves are returned with it so that mcpUnset leaves a
  * value a param was substituted into unread (E24.4): no part of a param's value reaches the report.
  */
@@ -609,7 +609,7 @@ function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, s
   const servers: Array<[string, unknown, string[] | undefined, string, SubstitutedLeaf[]]> = [];
   for (const target of p.resolution.targets) {
     const file = MCP_FILE[target as keyof typeof MCP_FILE];
-    // agents-md only: its mcp cell is `unsupported` in src/core/capabilities.ts
+    // agents-md, agent-skills and codex: their mcp cells are `unsupported` in src/core/capabilities.ts
     if (file === undefined) continue;
     // `written()` yields only what the matrix says this target writes; the skip warnings were plan()'s.
     const walk = written(p.resolution, target, () => {});
