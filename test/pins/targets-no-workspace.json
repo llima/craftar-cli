@@ -211,7 +211,7 @@
           "output": [
             ".cursor/agents/<name>.md"
           ],
-          "note": "name, description and model kept; tools and allowedTools have no Cursor field and are dropped with a warning"
+          "note": "name, description and model kept; tools have no Cursor field and are dropped with a warning"
         },
         "command": {
           "state": "unsupported",
@@ -244,6 +244,65 @@
           "state": "unsupported",
           "output": [],
           "note": "not written yet: Cursor's hook events differ — planned for a later release"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        }
+      }
+    },
+    {
+      "name": "copilot",
+      "inUse": null,
+      "capabilities": {
+        "rule": {
+          "state": "converted",
+          "output": [
+            ".github/instructions/<name>.instructions.md"
+          ],
+          "note": "written as .instructions.md in .github/instructions/; applyTo from fileMatchPattern (list or string), description from description field when present"
+        },
+        "agent": {
+          "state": "converted",
+          "output": [
+            ".github/agents/<name>.md"
+          ],
+          "note": "name and description kept; tools have no Copilot field and are dropped with a warning"
+        },
+        "command": {
+          "state": "converted",
+          "output": [
+            ".github/prompts/<name>.prompt.md"
+          ],
+          "note": "written as .prompt.md in .github/prompts/; description as YAML frontmatter when present, body unchanged"
+        },
+        "skill": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "mcp": {
+          "state": "converted",
+          "output": [
+            ".vscode/mcp.json"
+          ],
+          "note": "the servers under servers; each has type: stdio and the server's command, args, env"
+        },
+        "script": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "steering": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
         },
         "service": {
           "state": "unsupported",

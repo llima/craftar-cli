@@ -95,7 +95,7 @@ describe("a craftar.yaml the schema refuses, with a credential as the refused va
       const where = command.join(" ");
       expect(r.code, where).toBe(1);
       expect(r.stdout + r.stderr, where).not.toContain(M);
-      expect(r.stderr, where).toBe("error: invalid craftar.yaml: targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor'\n");
+      expect(r.stderr, where).toBe("error: invalid craftar.yaml: targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot'\n");
     }
     const d = runCli(["doctor", "--json", "--workspace", s.wsRoot]);
     expect(d.stdout + d.stderr).not.toContain(M);
