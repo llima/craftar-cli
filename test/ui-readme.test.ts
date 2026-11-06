@@ -56,7 +56,8 @@ describe("README — the Claude Code plugin", () => {
 describe("README — craftar ui --allow-writes", () => {
   it("the new README text for --allow-writes appears once each", () => {
     expect(count("**Read-only unless `--allow-writes`**")).toBe(1);
-    expect(count("started with `--allow-writes`, it also syncs a workspace or discards one hand-edited file")).toBe(1);
+    // Since 1.0.0 the status line is a short paragraph (the user's ruling of 2026-11-06); the fact lives in the Commands row.
+    expect(count("With `--allow-writes` (typing it is the consent) the page also offers **Sync** for a workspace and **Discard edit**")).toBe(1);
     expect(count("### to 0.37.0")).toBe(1);
   });
 });

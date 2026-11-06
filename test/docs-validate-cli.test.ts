@@ -158,13 +158,13 @@ describe("writes nothing (§11 item 13)", () => {
 });
 
 describe("the README (spec 47 §10)", () => {
-  it("Phase 2's shipped list ends with docs validate, Later no longer lists it, the status line and the Commands row say it", async () => {
+  it("Phase 2's shipped list ends with docs validate, Later no longer lists it, the Commands row says it", async () => {
     // A Windows checkout holds the README with CRLF; every assertion below reads it as LF.
     const readme = (await fs.readFile(path.join(__dirname, "..", "README.md"), "utf8")).replace(/\r\n/g, "\n");
     const lines = readme.split("\n");
     expect(lines.find((l) => l.startsWith("Phase 2"))!).toMatch(/`craftar docs validate` \([^)]*\)\.$/);
     expect(lines.find((l) => l.startsWith("Later:"))!).not.toContain("docs validate");
-    expect(lines.slice(0, 6).join("\n")).toContain("`craftar docs validate` checks a workspace's Markdown");
+    // Since 1.0.0 the status line is a short paragraph (the user's ruling of 2026-11-06); the fact lives in the Commands row.
     expect(lines.some((l) => l.startsWith("| `craftar docs validate [path] [--workspace <dir>] [--fetch] [--strict] [--json]` |"))).toBe(true);
     expect(readme).toContain("### to 0.46.0");
     expect(readme).toContain("`[path]`, relative to the workspace (not the current directory)");

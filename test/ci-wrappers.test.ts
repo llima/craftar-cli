@@ -647,7 +647,10 @@ describe("the README (spec 46 §9)", () => {
     // Spec 47 §14 item 14 moved `craftar docs validate` out of Later into Phase 2's shipped list (test/docs-validate-cli.test.ts).
   });
 
-  it("the status line gains its sentence", () => {
-    expect(lines.slice(0, 6).join("\n")).toContain("A GitHub Action and an Azure Pipelines template in this repository run `craftar sync --check` as a pull request's gate (see *In CI*).");
+  // Since 1.0.0 the status line is a short paragraph (the user's ruling of 2026-11-06); the fact lives in *In CI*.
+  it("In CI says both wrappers run sync --check", () => {
+    const readme = lines.join("\n");
+    expect(readme).toContain("## In CI");
+    expect(readme).toContain("A GitHub Action (`ci/github/action.yml`) and an Azure Pipelines template (`ci/azure/check.yml`) run `craftar sync --check`");
   });
 });
