@@ -2,7 +2,7 @@
  * Native-targets helpers (spec 61 §7).
  *
  * These functions determine whether a Forge schema is high enough to allow native targets
- * (cursor), and provide near-miss messages for use below the schema gate.
+ * (cursor, copilot, agent-skills), and provide near-miss messages for use below the schema gate.
  */
 
 import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget, FORGE_SCHEMA_NATIVE_TARGETS } from "../schema/index.js";
@@ -14,7 +14,7 @@ import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget, FORGE_SCHEMA_N
 export const NATIVE_TARGETS = TARGETS.filter((t) => !(LEGACY_TARGETS as readonly string[]).includes(t)) as readonly Target[];
 
 /**
- * Returns `true` when `manifest.schema` is high enough to allow native targets (cursor) in
+ * Returns `true` when `manifest.schema` is high enough to allow native targets (cursor, copilot, agent-skills) in
  * ingredients, profiles, and section markers.
  *
  * This is the ONE comparison with FORGE_SCHEMA_NATIVE_TARGETS.

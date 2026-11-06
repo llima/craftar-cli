@@ -25,7 +25,7 @@ import { checkLocals, ProfileLocalLoadError, readsLocalOverride, readsProfileLoc
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
 import { checkFamilies, familyOf, profileExtendsNearMiss, readsProfileExtends } from "./profile-extends.js";
 import { readsNativeTargets, nativeTargetNearMiss } from "./native-targets.js";
-import { isLegacyTarget, type Target } from "../schema/index.js";
+import { isLegacyTarget } from "../schema/index.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -140,7 +140,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     const m = lists ? null : listDeclarationNearMiss(file, params);
     if (m) throw new Error(m);
   };
-  // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor) in an ingredient's or profile's `targets` is a near miss.
+  // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor, copilot, agent-skills) in an ingredient's or profile's `targets` is a near miss.
   const nativeGate = readsNativeTargets(manifest);
   const checkTargets = (file: string, targets: readonly string[] | "*") => {
     if (nativeGate || targets === "*") return;
@@ -224,7 +224,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
           const left = await unnamedSectionFiles(folder, `profiles/${d.name}`, r.files);
           if (left.length) unnamed.set(p.name, left);
         }
-        // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor) in a profile's `targets` is a near miss.
+        // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor, copilot, agent-skills) in a profile's `targets` is a near miss.
         checkTargets(declaring, p.targets);
         profiles.set(p.name, p);
         profileFiles.set(p.name, declaring);

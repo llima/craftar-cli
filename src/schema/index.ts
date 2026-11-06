@@ -1032,7 +1032,7 @@ export const FORGE_SCHEMA_LOCAL_OVERRIDE = 12;
 export const FORGE_SCHEMA_PROFILE_EXTENDS = 13;
 /** Forge schema that reads a param declared `type: list` and its filtered placeholders, `{{ key | py }}` (spec 55 §4.1). */
 export const FORGE_SCHEMA_LIST_PARAMS = 14;
-/** Forge schema that allows native targets (cursor) in ingredients/profiles/sections (spec 61 §7). */
+/** Forge schema that allows native targets (cursor, copilot, agent-skills) in ingredients/profiles/sections (spec 61 §7). */
 export const FORGE_SCHEMA_NATIVE_TARGETS = 15;
 
 export const ForgeManifestSchema = z.object({
@@ -1146,9 +1146,8 @@ export const LockEntrySchemaV4 = z.object({
   ingredient: z.string(),
 });
 /**
- * Lock schema 4 (spec 61 §7): written when a sync emits files for native targets (cursor).
- * A craftar < 0.18 refuses native targets at load, so a V4 lock is never written there;
- * here it signals `cursor` entries exist.
+ * Lock schema 4 (spec 61 §7): written when a sync emits files for native targets (cursor, copilot, agent-skills).
+ * Every craftar before 1.1.0 refuses lock schema 4 by name; here it signals entries for a native target.
  */
 export const LockSchemaV4 = z.object({
   schema: z.literal(4),

@@ -1587,7 +1587,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   }
 
   // Lock schema selection (spec 31 §5.2, spec 61 §7):
-  // - Schema 4 when targets include a native target (cursor), OR when any entry has a native target
+  // - Schema 4 when targets include a native target (cursor, copilot, agent-skills), OR when any entry has a native target
   //   (including kept entries from a previous lock) — even if no file is emitted for it.
   // - Schema 3 when any entry has target `services` (and no native target in targets or entries).
   // - Schema 2 otherwise.
@@ -1607,7 +1607,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     ? { schema: 4, ...base, files: sortedEntries }
     : hasServices
     // The narrowing casts are sound: nativeTarget is null and hasNativeEntry is false, so targets has no native target
-    // (cursor) and no entry has one; every entry's target is a legacy owner (claude-code | kiro | agents-md | services).
+    // (cursor, copilot, agent-skills) and no entry has one; every entry's target is a legacy owner (claude-code | kiro | agents-md | services).
     ? { schema: 3, ...base, targets: base.targets as LegacyTarget[], files: sortedEntries as LockEntryV3[] }
     // The narrowing casts are sound: hasServices is false, no native target, and no native entry, so targets has no
     // native target and no entry has target "services" or a native target; every target and entry target is a LegacyTarget.

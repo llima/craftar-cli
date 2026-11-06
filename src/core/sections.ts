@@ -41,7 +41,7 @@ export type MarkerLineResult =
 export interface MarkerLineOptions {
   /** Whether to read `targets=` attribute on section markers. Default: false. */
   targets?: boolean;
-  /** Whether to allow native targets (cursor) in `targets=`. Default: false. Only relevant when `targets` is true. */
+  /** Whether to allow native targets (cursor, copilot, agent-skills) in `targets=`. Default: false. Only relevant when `targets` is true. */
   nativeTargets?: boolean;
 }
 
@@ -137,7 +137,7 @@ export interface ParsedSections {
 export interface ParseSectionsOptions {
   /** Whether to read `targets=` attribute on section markers. Default: false. */
   targets?: boolean;
-  /** Whether to allow native targets (cursor) in `targets=`. Default: false. Only relevant when `targets` is true. */
+  /** Whether to allow native targets (cursor, copilot, agent-skills) in `targets=`. Default: false. Only relevant when `targets` is true. */
   nativeTargets?: boolean;
 }
 
