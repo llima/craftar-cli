@@ -26,6 +26,7 @@ export const TARGET_SINCE: Record<Target, number> = {
   copilot: FORGE_SCHEMA_NATIVE_TARGETS,
   "agent-skills": FORGE_SCHEMA_NATIVE_TARGETS,
   codex: FORGE_SCHEMA_SLICE_2_TARGETS,
+  antigravity: FORGE_SCHEMA_SLICE_2_TARGETS,
 };
 
 /** Whether a Forge at `schema` may name `target`. The ONE comparison with the targets' gates. */

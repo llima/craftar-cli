@@ -19,7 +19,7 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
  * agents-md, agent-skills and codex write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` is shared, D5),
  * so they have no entries.
  */
-export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
 
 /** What effectiveTargets reads of a resolution: agents-md.primary and the workspace's targets. */
 export interface TargetsView {
@@ -33,7 +33,7 @@ export interface TargetsView {
  */
 const CARRIED: ReadonlyArray<{ carrier: Target; writtenTo: string; skippers: readonly Target[]; concerns: (meta: Ingredient) => boolean }> = [
   // §6.1: an always-on rule with the default targets is left to AGENTS.md, which Cursor and Copilot read.
-  { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["cursor", "copilot"], concerns: (m) => m.type === "rule" && m.inclusion === "always" && m.targets === "*" },
+  { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["cursor", "copilot", "antigravity"], concerns: (m) => m.type === "rule" && m.inclusion === "always" && m.targets === "*" },
   // §9: a command with the default targets is left to .agents/skills/, which Copilot reads; a command listed [copilot] keeps its prompt file.
   { carrier: "agent-skills", writtenTo: ".agents/skills/", skippers: ["copilot"], concerns: (m) => m.type === "command" && m.targets === "*" },
 ];
@@ -44,6 +44,7 @@ const CARRIED: ReadonlyArray<{ carrier: Target; writtenTo: string; skippers: rea
  */
 export function carriedPath(target: string, meta: Ingredient, ref: string): { path: string; ingredient: string } | null {
   if (target === "cursor" && meta.type === "rule") return { path: `.cursor/rules/${outName(meta)}.mdc`, ingredient: ref };
+  if (target === "antigravity" && meta.type === "rule") return { path: `.agents/rules/${outName(meta)}.md`, ingredient: ref };
   if (target === "copilot" && meta.type === "rule") return { path: ".github/copilot-instructions.md", ingredient: "rule/*" };
   if (target === "copilot" && meta.type === "command") return { path: `.github/prompts/${outName(meta)}.prompt.md`, ingredient: ref };
   return null;

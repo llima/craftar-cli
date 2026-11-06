@@ -419,6 +419,63 @@
           "note": "skipped with a warning when aimed at this target"
         }
       }
+    },
+    {
+      "name": "antigravity",
+      "inUse": false,
+      "capabilities": {
+        "rule": {
+          "state": "converted",
+          "output": [
+            ".agents/rules/<name>.md"
+          ],
+          "note": "always written with a trigger: always_on, glob with globs from fileMatchPattern, manual, or model_decision for an auto rule with a description (an auto rule without one is written manual, with a warning); a .claude/rules/ reference in the body names the file a target writes for that rule; with agents-md among the targets, an always-on rule with the default targets is left to AGENTS.md"
+        },
+        "agent": {
+          "state": "converted",
+          "output": [
+            ".agents/agents/<name>.md"
+          ],
+          "note": "name, description and model kept, model written as inherit unless it is inherit, flash or pro; tools are not written (Antigravity's tool names are not measured), dropped with a warning"
+        },
+        "command": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agent-skills: Antigravity reads .agents/skills/, written by the agent-skills target (its workflows stopped working on 2026-10-19)"
+        },
+        "skill": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agent-skills: Antigravity reads .agents/skills/, written by the agent-skills target"
+        },
+        "mcp": {
+          "state": "converted",
+          "output": [
+            ".agents/mcp_config.json"
+          ],
+          "note": "the servers under mcpServers, each kept whole; a remote server's url becomes serverUrl"
+        },
+        "script": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "steering": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "not written yet: Antigravity's hook events differ — planned for a later release"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        }
+      }
     }
   ],
   "warnings": []

@@ -34,9 +34,9 @@ function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
 /**
  * All AI-coder targets Craftar supports. Spec 61 §7: `cursor` added at Forge schema 15, `copilot` at schema 15.
  * Spec 61 §6, Ruling 3: `agent-skills` writes `.agents/skills/`, read by Cursor, Copilot, Codex and others.
- * Spec 61 slice 2: `codex` at Forge schema 16 (its plan's G1, ruled 2026-11-06).
+ * Spec 61 slice 2: `codex` and `antigravity` at Forge schema 16 (its plan's G1, ruled 2026-11-06).
  */
-export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot", "agent-skills", "codex"] as const;
+export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot", "agent-skills", "codex", "antigravity"] as const;
 export type Target = (typeof TARGETS)[number];
 export const TargetSchema = z.enum(TARGETS);
 
@@ -1041,7 +1041,7 @@ export const FORGE_SCHEMA_PROFILE_EXTENDS = 13;
 export const FORGE_SCHEMA_LIST_PARAMS = 14;
 /** Forge schema that allows native targets (cursor, copilot, agent-skills) in ingredients/profiles/sections (spec 61 §7). */
 export const FORGE_SCHEMA_NATIVE_TARGETS = 15;
-/** Forge schema that allows spec 61 slice 2's targets (codex) in ingredients/profiles/sections (its plan's G1). */
+/** Forge schema that allows spec 61 slice 2's targets (codex, antigravity) in ingredients/profiles/sections (its plan's G1). */
 export const FORGE_SCHEMA_SLICE_2_TARGETS = 16;
 
 export const ForgeManifestSchema = z.object({
@@ -1184,7 +1184,7 @@ export const LockSchemaV4 = z.object({
 export const LockEntrySchemaV5 = LockEntrySchemaV4.extend({ target: OwnerSchema });
 /**
  * Lock schema 5 (spec 61 slice 2, G1): written exactly when the lock's `targets` or one of its entries names a target 1.1.0 did not
- * know (`codex`). Every craftar before 1.2.0 refuses it by name.
+ * know (`codex`, `antigravity`). Every craftar before 1.2.0 refuses it by name.
  */
 export const LockSchemaV5 = LockSchemaV4.extend({
   schema: z.literal(5),

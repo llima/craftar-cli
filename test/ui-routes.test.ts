@@ -110,7 +110,7 @@ describe("/api/workspaces", () => {
     expect(got.workspaces.map(({ id, ...row }: any) => row)).toEqual(JSON.parse(runCli(["workspaces", "--json"]).stdout).workspaces);
     expect(got.warnings).toEqual([
       `${one.path}: craftar.lock is not valid JSON`,
-      `${twoId.path}: invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex', and 1 more)`,
+      `${twoId.path}: invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex' | 'antigravity', and 1 more)`,
     ]);
     expect(JSON.stringify(answer)).not.toContain("SENTINEL");
   });
@@ -165,7 +165,7 @@ describe("/api/workspaces/<id>", () => {
     await fs.writeFile(lockFile, lock);
     await fs.appendFile(path.join(s.wsRoot, "craftar.yaml"), "targets: [SENTINEL-YAML]\n");
     const y = await get(`/api/workspaces/${id}/recipes`);
-    expect(y).toEqual({ status: 409, body: { error: "invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex')", warnings: [] } });
+    expect(y).toEqual({ status: 409, body: { error: "invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex' | 'antigravity')", warnings: [] } });
     await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), YAML.stringify({ forge: "../forge", profile: "acme", ref: "v1" }));
     // The server resolves the workspace's real path; on Windows, TEMP can be an 8.3 short path (RUNNER~1 vs runneradmin).
     const forgeShown = path.join(await fs.realpath(path.dirname(s.forgeRoot)), path.basename(s.forgeRoot));
@@ -397,7 +397,7 @@ describe("routeReason on a schema refusal", () => {
     await syncRegistered(s.wsRoot);
     await fs.writeFile(path.join(s.wsRoot, "craftar.yaml"), "forge: ../forge\nprofile: acme\ntargets: [nope, neither]\n");
     const thrown: unknown = await loadWorkspace(s.wsRoot, { mode: "no-fetch", home: HOME() }).then(() => null, (e: unknown) => e);
-    expect(routeReason(thrown)).toBe("invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex', and 1 more)");
+    expect(routeReason(thrown)).toBe("invalid craftar.yaml (targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex' | 'antigravity', and 1 more)");
   });
 });
 
