@@ -23,7 +23,7 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
     expect(phase(1).endsWith("; `craftar settings apply` (the generated `hooks` and `env` names merged into `.claude/settings.json`, only when a person types it).")).toBe(true);
   });
 
-  it("Later is unchanged", () => {
+  it("Later names the targets of slices 2 and 3", () => {
     const later = lines.filter((l) => l.startsWith("Later:"));
     expect(later).toEqual(["Later: targets for Codex and Antigravity, then hooks for the new targets and a Gemini target; the Agent Plugin packaging of `craftar mcp`."]);
   });
