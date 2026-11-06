@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "api": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "api",
+        "--port",
+        "8080"
+      ],
+      "env": {
+        "TOKEN": "${API_TOKEN}"
+      }
+    }
+  }
+}
