@@ -352,7 +352,7 @@ function filterTargetsOutput(output: string): string {
       const legacyTargets = ["claude-code", "kiro", "agents-md"];
       parsed.targets = parsed.targets.filter((t: { name: string }) => legacyTargets.includes(t.name));
     }
-    return JSON.stringify(parsed, null, 2);
+    return JSON.stringify(parsed, null, 2) + "\n";
   } catch {
     return output;
   }
