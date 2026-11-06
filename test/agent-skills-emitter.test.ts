@@ -191,6 +191,57 @@ describe("agent-skills emitter (spec 61 §6 Ruling 3, §9 Ruling 6)", () => {
     expect(p.files.map((f) => f.path).sort()).toEqual([".claude/commands/analyze.md", ".claude/skills/analyze/SKILL.md"]);
   });
 
+  // Test 10: a skill's shell script is rendered like claude-code renders it (a {{param}} is substituted), not copied as bytes
+  it("10. a skill's run.sh is rendered: {{param}} substituted", async () => {
+    const s = kept(await scenario(
+      {
+        ingredients: [{ meta: { type: "skill", name: "deploy", layout: "dir", params: { env: { default: "prod" } } }, files: { "SKILL.md": "Deploy.\n", "run.sh": "echo {{env}}\n" } }],
+        recipes: [recipe("base", ["skill/deploy"])],
+        profiles: [profile("acme", ["base"], ["agent-skills"])],
+      },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+    expect(p.files.find((f) => f.path === ".agents/skills/deploy/run.sh")!.content.toString("utf8")).toBe("echo prod\n");
+  });
+
+  // Test 11: names that differ only in case write one folder on Windows and macOS — still a clash
+  it("11. a command Review and a skill review clash, compared without case", async () => {
+    const s = kept(await scenario(
+      {
+        ingredients: [
+          { meta: { type: "skill", name: "review", layout: "dir", targets: ["agent-skills"] }, files: { "SKILL.md": "Skill.\n" } },
+          { meta: { type: "command", name: "Review", description: "Review", targets: ["agent-skills"] }, files: { "command.md": "Command.\n" } },
+        ],
+        recipes: [recipe("base", ["skill/review", "command/Review"])],
+        profiles: [profile("acme", ["base"], ["agent-skills"])],
+      },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    await expect(plan(ws)).rejects.toThrow("agent-skills: command/Review and skill/review both write .agents/skills/Review/ — rename one of them");
+  });
+
+  // Test 12: a command with no description — the Agent Skills format expects one
+  it("12. a command with no description is written and warned", async () => {
+    const s = kept(await scenario(
+      {
+        ingredients: [{ meta: { type: "command", name: "fix", targets: ["agent-skills"] }, files: { "command.md": "Fix it.\n" } }],
+        recipes: [recipe("base", ["command/fix"])],
+        profiles: [profile("acme", ["base"], ["agent-skills"])],
+      },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+    expect(p.files.find((f) => f.path === ".agents/skills/fix/SKILL.md")!.content.toString("utf8")).toBe('---\nname: "fix"\ndisable-model-invocation: true\n---\nFix it.\n');
+    expect(p.warnings).toContain('agent-skills: command "fix" has no description, which the Agent Skills format expects; a reader may skip it');
+  });
+
   // Test 9: every new target on — the skill reaches .agents/skills/ once, never .cursor/ or .github/, no (last wins)
   it("9. with claude-code, cursor, copilot and agent-skills, a skill is written once under .agents/skills/", async () => {
     const s = kept(await scenario(

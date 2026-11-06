@@ -1,10 +1,10 @@
 import { listFiles } from "../core/forge.js";
 import type { Ingredient } from "../schema/index.js";
+import { TEXT_EXT } from "./claude-code.js";
 import { outName, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
 
-/** The text files of a skill folder, rendered through ctx.text; every other file is copied as bytes (as kiro does). */
-const TEXT_EXT = /\.(md|txt|json|ya?ml)$/i;
+// A skill folder's text files are rendered through ctx.text, as claude-code renders them (TEXT_EXT, one list); every other file is copied as bytes.
 
 /**
  * The standard skills folder (spec 61 §6, Ruling 3): `.agents/skills/<name>/`, read by Cursor, Copilot, Codex, Antigravity and
@@ -15,15 +15,16 @@ export const agentSkills: Emitter<"agent-skills"> = {
   async emit(ctx) {
     const out: PlannedFile[] = [];
     const t = "agent-skills";
-    /** outName → the ref of the skill or command that writes `.agents/skills/<outName>/`. */
+    /** outName, lower-cased (Windows and macOS fold case), → the ref of the skill or command that writes `.agents/skills/<outName>/`. */
     const owners = new Map<string, { ref: string; type: "skill" | "command" }>();
     const claim = (name: string, ref: string, type: "skill" | "command") => {
-      const prev = owners.get(name);
+      const key = name.toLowerCase();
+      const prev = owners.get(key);
       if (prev && prev.type !== type) {
         const [cmd, skill] = type === "command" ? [ref, prev.ref] : [prev.ref, ref];
         throw new Error(`agent-skills: ${cmd} and ${skill} both write .agents/skills/${name}/ — rename one of them`);
       }
-      owners.set(name, { ref, type });
+      owners.set(key, { ref, type });
     };
     for (const ing of ctx.aimed) {
       const m = ctx.meta(ing);
@@ -47,6 +48,7 @@ export const agentSkills: Emitter<"agent-skills"> = {
           claim(outName(m), ing.ref, "command");
           const lines = [`name: ${JSON.stringify(outName(m))}`];
           if (m.description) lines.push(`description: ${JSON.stringify(m.description)}`);
+          else ctx.warn(`agent-skills: command "${outName(m)}" has no description, which the Agent Skills format expects; a reader may skip it`);
           if (m.argumentHint) lines.push(`argument-hint: ${JSON.stringify(m.argumentHint)}`);
           lines.push("disable-model-invocation: true");
           if ((m.allowedTools?.length ?? 0) > 0) ctx.warn(`agent-skills: command "${outName(m)}": allowed-tools is not written to a skill; dropped`);
