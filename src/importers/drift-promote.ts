@@ -79,7 +79,7 @@ import { errorText } from "../core/schema-fault.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
-import { stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
+import { isLegacyOwner, stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
 import { deepMerge } from "../core/merge.js";
 import type { Sections } from "../schema/index.js";
 
@@ -690,9 +690,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(D6(normalized));
     } else if (reason === "several rules") {
       throw new Error(D5_AGENTSMD(normalized));
-    } else if (reason?.endsWith(" file")) {
-      // A new target's file (e.g. "cursor file", "copilot file")
-      const target = reason.slice(0, -5); // strip " file"
+    } else if (fileStatus.target && !isLegacyOwner(fileStatus.target)) {
+      // A new target's file (spec 61): decided by the status's target, not by the reason's text
+      const target = fileStatus.target;
       const ingredientRef = fileStatus.ingredient;
       const claudePath = ingredientRef ? p0.files.find((f) => f.ingredient === ingredientRef && f.target === "claude-code")?.path : null;
       const hint = claudePath ? `; edit and promote \`${claudePath}\` instead` : "";
