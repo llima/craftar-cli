@@ -25,7 +25,7 @@ import { checkLocals, ProfileLocalLoadError, readsLocalOverride, readsProfileLoc
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
 import { checkFamilies, familyOf, profileExtendsNearMiss, readsProfileExtends } from "./profile-extends.js";
 import { readsNativeTargets, nativeTargetNearMiss } from "./native-targets.js";
-import { isLegacyTarget, FORGE_SCHEMA_NATIVE_TARGETS, type Target } from "../schema/index.js";
+import { isLegacyTarget, type Target } from "../schema/index.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -141,14 +141,12 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     if (m) throw new Error(m);
   };
   // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor) in an ingredient's or profile's `targets` is a near miss.
-  const nativeGate = readsNativeTargets(manifest.schema);
+  const nativeGate = readsNativeTargets(manifest);
   const checkTargets = (file: string, targets: readonly string[] | "*") => {
     if (nativeGate || targets === "*") return;
     for (const t of targets) {
       if (!isLegacyTarget(t)) {
-        const hint = nativeTargetNearMiss(t);
-        const msg = hint ? `${file}: targets: ${hint} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in craftar.forge.yaml` : `${file}: targets: ${t} is not a valid target`;
-        throw new Error(msg);
+        throw new Error(nativeTargetNearMiss(file, "targets", t));
       }
     }
   };

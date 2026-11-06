@@ -16,7 +16,7 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
 import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockV2, type LockV3, type LockV4, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, FORGE_SCHEMA_NATIVE_TARGETS, isLegacyTarget } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockV2, type LockV3, type LockV4, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyTarget, isLegacyOwner } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -602,16 +602,12 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
         // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target in a section's targets= is a near miss.
-        if (!readsNativeTargets(forge.manifest.schema)) {
+        if (!readsNativeTargets(forge.manifest)) {
           for (const s of p.sections) {
             if (s.targets) {
               for (const t of s.targets) {
                 if (!isLegacyTarget(t)) {
-                  const hint = nativeTargetNearMiss(t);
-                  const msg = hint
-                    ? `${forgeRel(forge, abs)}: section ${s.name} targets=: ${hint} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in ${FORGE_MANIFEST}`
-                    : `${forgeRel(forge, abs)}: section ${s.name} targets=: ${t} is not a valid target`;
-                  throw new Error(msg);
+                  throw new Error(nativeTargetNearMiss(forgeRel(forge, abs), `section ${s.name} targets=`, t));
                 }
               }
             }
@@ -1570,12 +1566,14 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   }
 
   // Lock schema selection (spec 31 §5.2, spec 61 §7):
-  // - Schema 4 when targets include a native target (cursor) — even if no file is emitted for it.
-  // - Schema 3 when any entry has target `services` (and no native target in targets).
+  // - Schema 4 when targets include a native target (cursor), OR when any entry has a native target
+  //   (including kept entries from a previous lock) — even if no file is emitted for it.
+  // - Schema 3 when any entry has target `services` (and no native target in targets or entries).
   // - Schema 2 otherwise.
   const sortedEntries = entries.sort((a, b) => a.path.localeCompare(b.path));
   const hasServices = entries.some((e) => e.target === "services");
   const nativeTarget = firstNewTarget(p.resolution.targets);
+  const hasNativeEntry = entries.some((e) => !isLegacyOwner(e.target));
   // Build the shared part once; the branches differ only in `schema` and in the entry type.
   const base = {
     forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
@@ -1584,14 +1582,14 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     targets: p.resolution.targets,
     generatedAt: new Date().toISOString(),
   };
-  const built: LockV2 | LockV3 | LockV4 = nativeTarget !== null
+  const built: LockV2 | LockV3 | LockV4 = nativeTarget !== null || hasNativeEntry
     ? { schema: 4, ...base, files: sortedEntries }
     : hasServices
-    // The narrowing casts are sound: nativeTarget is null, so targets has no native target (cursor) and no entry has one;
-    // every entry's target is a legacy owner (claude-code | kiro | agents-md | services).
+    // The narrowing casts are sound: nativeTarget is null and hasNativeEntry is false, so targets has no native target
+    // (cursor) and no entry has one; every entry's target is a legacy owner (claude-code | kiro | agents-md | services).
     ? { schema: 3, ...base, targets: base.targets as LegacyTarget[], files: sortedEntries as LockEntryV3[] }
-    // The narrowing casts are sound: hasServices is false and no native target, so targets has no native target and no entry has
-    // target "services" or a native target; every target and entry target is a LegacyTarget (claude-code | kiro | agents-md).
+    // The narrowing casts are sound: hasServices is false, no native target, and no native entry, so targets has no
+    // native target and no entry has target "services" or a native target; every target and entry target is a LegacyTarget.
     : { schema: 2, ...base, targets: base.targets as LegacyTarget[], files: sortedEntries as LockEntry[] };
   // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
   // lock always differs, so the first sync with this craftar upgrades it.

@@ -2,10 +2,10 @@
  * Native-targets helpers (spec 61 §7).
  *
  * These functions determine whether a Forge schema is high enough to allow native targets
- * (cursor), and provide near-miss detection for typos.
+ * (cursor), and provide near-miss messages for use below the schema gate.
  */
 
-import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget } from "../schema/index.js";
+import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget, FORGE_SCHEMA_NATIVE_TARGETS, type ForgeManifest } from "../schema/index.js";
 
 /**
  * The targets that require Forge schema 15 (FORGE_SCHEMA_NATIVE_TARGETS).
@@ -14,23 +14,27 @@ import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget } from "../sche
 export const NATIVE_TARGETS = TARGETS.filter((t) => !(LEGACY_TARGETS as readonly string[]).includes(t)) as readonly Target[];
 
 /**
- * Returns `true` when `schema` is high enough to allow native targets (cursor) in
+ * Returns `true` when `manifest.schema` is high enough to allow native targets (cursor) in
  * ingredients, profiles, and section markers.
+ *
+ * This is the ONE comparison with FORGE_SCHEMA_NATIVE_TARGETS.
  */
-export function readsNativeTargets(schema: number): boolean {
-  return schema >= 15;
+export function readsNativeTargets(manifest: Pick<ForgeManifest, "schema">): boolean {
+  return manifest.schema >= FORGE_SCHEMA_NATIVE_TARGETS;
 }
 
 /**
- * For a string that is not a valid target, returns the closest native target if it looks
- * like a typo (Levenshtein distance ≤ 2). Used by `loadForge` to give a helpful hint.
+ * Returns the near-miss message for a native target found below the schema gate.
+ * Used by `loadForge` (key: `targets`) and section pass (key: `section <name> targets=`)
+ * to produce consistent error messages.
+ *
+ * @param file - The file where the target was found (Forge-relative path)
+ * @param key - The context key (e.g. "targets" or "section tone targets=")
+ * @param target - The native target that was found
+ * @returns The error message to display
  */
-export function nativeTargetNearMiss(input: string): Target | null {
-  const lower = input.toLowerCase();
-  for (const t of NATIVE_TARGETS) {
-    if (levenshtein(lower, t) <= 2) return t;
-  }
-  return null;
+export function nativeTargetNearMiss(file: string, key: string, target: string): string {
+  return `${file}: ${key}: ${target} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in craftar.forge.yaml`;
 }
 
 /**
@@ -42,35 +46,4 @@ export function firstNewTarget(targets: readonly string[]): Target | null {
     if ((NATIVE_TARGETS as readonly string[]).includes(t)) return t as Target;
   }
   return null;
-}
-
-/**
- * Simple Levenshtein distance for short strings (target names are ≤ 10 chars).
- */
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-
-  const matrix: number[][] = [];
-
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
-  }
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
-  }
-
-  for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      const cost = a[j - 1] === b[i - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,      // deletion
-        matrix[i][j - 1] + 1,      // insertion
-        matrix[i - 1][j - 1] + cost // substitution
-      );
-    }
-  }
-
-  return matrix[b.length][a.length];
 }
