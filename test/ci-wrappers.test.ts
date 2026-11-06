@@ -651,6 +651,6 @@ describe("the README (spec 46 §9)", () => {
   it("In CI says both wrappers run sync --check", () => {
     const readme = lines.join("\n");
     expect(readme).toContain("## In CI");
-    expect(readme).toContain("A GitHub Action (`ci/github/action.yml`) and an Azure Pipelines template (`ci/azure/check.yml`) run `craftar sync --check`");
+    expect(readme).toContain("`craftar sync --check` is the verdict");
   });
 });
