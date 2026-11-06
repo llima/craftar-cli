@@ -169,3 +169,19 @@ describe("through cells", () => {
     expect(carried.warnings.filter((w) => w.startsWith("antigravity:"))).toEqual([]);
   });
 });
+
+describe("the rules index in an antigravity rule body (schema 16 includes 7)", () => {
+  it("alone on its line it becomes the list, named as antigravity names its rules; misplaced, it draws the misplaced-placeholder warning", async () => {
+    const readme = rule("readme", { description: "Start here" }, "Rules:\n{{craftar.rules.index}}\n");
+    const api = rule("api", { inclusion: "fileMatch", fileMatchPattern: "src/**", description: "API" });
+    const p = await planOf(await ws(16, ["antigravity"], [readme, api]));
+    const body = text(p, ".agents/rules/readme.md");
+    expect(body).not.toContain("{{craftar.rules.index}}");
+    expect(body).toContain("`.agents/rules/api.md`");
+    expect(p.indexed.map((i) => i.path)).toContain(".agents/rules/readme.md");
+    expect(p.warnings.filter((w) => w.includes("craftar.rules.index"))).toEqual([]);
+
+    const misplaced = await planOf(await ws(16, ["antigravity"], [rule("readme", {}, "Rules: {{craftar.rules.index}}\n")]));
+    expect(misplaced.warnings).toContain("{{craftar.rules.index}} must stand alone on its line — left as written in .agents/rules/readme.md:5");
+  });
+});

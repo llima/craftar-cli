@@ -993,7 +993,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     // Scan the planned files for misplaced placeholders (not alone on line).
     // This detects lines in the PLANNED content, not the ingredient body.
     // Applies to rule bodies (.claude/rules/<name>.md, .kiro/steering/<name>.md, and since spec 61 .cursor/rules/<name>.mdc,
-    // .github/instructions/<name>.instructions.md and .github/copilot-instructions.md) and AGENTS.md.
+    // .github/instructions/<name>.instructions.md, .github/copilot-instructions.md and .agents/rules/<name>.md) and AGENTS.md.
     const misplacedLocations: string[] = [];
     const isRuleOrSteeringOrAgentsMd = (p: string) =>
       p === "AGENTS.md" ||
@@ -1001,7 +1001,8 @@ export async function plan(ws: Workspace): Promise<Plan> {
       /^\.claude\/rules\/[^/]+\.md$/.test(p) ||
       /^\.kiro\/steering\/[^/]+\.md$/.test(p) ||
       /^\.cursor\/rules\/[^/]+\.mdc$/.test(p) ||
-      /^\.github\/instructions\/[^/]+\.instructions\.md$/.test(p);
+      /^\.github\/instructions\/[^/]+\.instructions\.md$/.test(p) ||
+      /^\.agents\/rules\/[^/]+\.md$/.test(p);
 
     for (const f of planned) {
       if (!isRuleOrSteeringOrAgentsMd(f.path)) continue;
@@ -1590,7 +1591,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
 
   // Lock schema selection (spec 31 §5.2, spec 61 §7, slice 2's G1): the highest schema the lock's targets and its entries need
   // (`lockSchemaFor`) — kept entries from a previous lock included, even when no file is emitted for them:
-  // - 5 when one names a target 1.1.0 did not know (codex);
+  // - 5 when one names a target 1.1.0 did not know (codex, antigravity);
   // - 4 when one names a slice-1 target (cursor, copilot, agent-skills);
   // - 3 when an entry has target `services`;
   // - 2 otherwise.
