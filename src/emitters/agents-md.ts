@@ -45,7 +45,7 @@ export const agentsMd: Emitter<"agents-md"> = {
     const lookup = buildRuleLookup(ctx.resolution.ingredients, ctx.resolution);
     // For mode-off comparison (spec 41 §4.4)
     const primary = ctx.resolution.primary;
-    const lookupOff = primary ? buildRuleLookup(ctx.resolution.ingredients, { primary: false }) : null;
+    const lookupOff = primary ? buildRuleLookup(ctx.resolution.ingredients, { primary: false, targets: ctx.resolution.targets }) : null;
     // Track whether any text differs due to mode
     let anyDiffersDueToMode = false;
 

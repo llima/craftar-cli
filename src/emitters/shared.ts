@@ -4,7 +4,7 @@ import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor, listsOf } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
-import { ENV_NAME } from "../schema/index.js";
+import { ENV_NAME, TARGETS } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
 import { RULES_INDEX_LINE, RULES_INDEX_KEY, RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import { metaFor } from "../core/metadata-params.js";
@@ -20,13 +20,53 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
  */
 export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills">, string>;
 
+/** What effectiveTargets reads of a resolution: agents-md.primary and the workspace's targets. */
+export interface TargetsView {
+  primary: boolean;
+  targets: readonly string[];
+}
+
 /**
- * The targets an ingredient is aimed at in this workspace (spec 41 §4.3): its declared `targets`, except, under
- * agents-md.primary, an always-on rule with the default targets, which is aimed at agents-md alone. The one
- * answer to "is this rule AGENTS.md-only"; returns `meta.targets` itself when the mode is off.
+ * The skips that depend on the workspace's targets (spec 61 §6.1, §9): with its carrier among the targets, an ingredient
+ * the skip concerns is not written by the skipping targets — the tool reads it in the carrier's file instead.
  */
-export function effectiveTargets(meta: Ingredient, resolution: { primary: boolean }): "*" | string[] {
-  return agentsMdOnly(meta, resolution) ? ["agents-md"] : meta.targets;
+const CARRIED: ReadonlyArray<{ carrier: Target; writtenTo: string; skippers: readonly Target[]; concerns: (meta: Ingredient) => boolean }> = [
+  // §6.1: an always-on rule with the default targets is left to AGENTS.md, which Cursor and Copilot read.
+  { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["cursor", "copilot"], concerns: (m) => m.type === "rule" && m.inclusion === "always" && m.targets === "*" },
+  // §9: a command with the default targets is left to .agents/skills/, which Copilot reads; a command listed [copilot] keeps its prompt file.
+  { carrier: "agent-skills", writtenTo: ".agents/skills/", skippers: ["copilot"], concerns: (m) => m.type === "command" && m.targets === "*" },
+];
+
+/**
+ * The file a skipping target would have written for `meta` (spec 61 §6.1, §9): what `explain` and the orphan reason name when a
+ * carried skip left it to the carrier. Copilot's always-on rules share one aggregate, so that path is the aggregate's.
+ */
+export function carriedPath(target: string, meta: Ingredient): string | null {
+  if (target === "cursor" && meta.type === "rule") return `.cursor/rules/${outName(meta)}.mdc`;
+  if (target === "copilot" && meta.type === "rule") return ".github/copilot-instructions.md";
+  if (target === "copilot" && meta.type === "command") return `.github/prompts/${outName(meta)}.prompt.md`;
+  return null;
+}
+
+/** The carrier file that holds `meta` for `target` in this workspace (spec 61 §6.1, §9), or null when no skip applies. */
+export function carriedTo(meta: Ingredient, target: string, resolution: TargetsView): string | null {
+  for (const c of CARRIED)
+    if (c.concerns(meta) && (c.skippers as readonly string[]).includes(target) && resolution.targets.includes(target) && resolution.targets.includes(c.carrier)) return c.writtenTo;
+  return null;
+}
+
+/**
+ * The targets an ingredient is aimed at in this workspace (spec 41 §4.3, spec 61 §6.1): its declared `targets`, except
+ * - under agents-md.primary, an always-on rule with the default targets, aimed at agents-md alone; and
+ * - an ingredient a carried skip concerns (`carriedTo`), aimed at every target but the skipping ones.
+ * The one answer to "which targets write this"; returns `meta.targets` itself when neither applies, so a workspace that
+ * names no new target sees no change.
+ */
+export function effectiveTargets(meta: Ingredient, resolution: TargetsView): "*" | string[] {
+  if (agentsMdOnly(meta, resolution)) return ["agents-md"];
+  const skipped = TARGETS.filter((t) => carriedTo(meta, t, resolution) !== null);
+  if (!skipped.length) return meta.targets;
+  return TARGETS.filter((t) => !skipped.includes(t));
 }
 
 /** Under agents-md.primary, an always-on rule with the default targets: written to AGENTS.md alone (spec 41 §4.2). */
@@ -86,7 +126,7 @@ export interface RuleLookup {
 }
 
 /** Build the lookup maps for rule reference resolution, once per AGENTS.md. */
-export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: { primary: boolean } = { primary: false }): RuleLookup {
+export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: TargetsView = { primary: false, targets: [] }): RuleLookup {
   const rulesByName = new Map<string, ResolvedIngredient>();
   const steeringsByName = new Map<string, ResolvedIngredient>();
   const ruleTargets = new Map<string, "*" | string[]>();
@@ -1021,7 +1061,7 @@ export function expandRulesIndex(
  * Claude Code does not list such skills.
  */
 export function flatSkills(
-  resolution: { ingredients: readonly { meta: { type: string; name: string; as?: string; layout?: string; targets: "*" | string[] } }[]; primary: boolean },
+  resolution: { ingredients: readonly { meta: { type: string; name: string; as?: string; layout?: string; targets: "*" | string[] } }[]; primary: boolean; targets: readonly string[] },
   targets: readonly string[],
 ): string[] {
   if (!targets.includes("claude-code")) return [];

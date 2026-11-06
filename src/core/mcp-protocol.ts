@@ -3,7 +3,7 @@ import { catalogueContext, checkType, listIngredients, listRecipes, withLoadWarn
 import { renderDiff } from "./diff.js";
 import { runDoctor, workspaceReport, type DoctorOptions } from "./doctor.js";
 import { unmanaged } from "./drift.js";
-import { cachedCopyLine, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport, withEscapeLine } from "./report.js";
+import { cachedCopyLine, carriedFile, diffReport, explainFile, notProduced, statusPath, statusReport, targetsReport, withEscapeLine } from "./report.js";
 import { errorText, schemaFault } from "./schema-fault.js";
 import { loadForgeFor, plan, readLock, readWorkspaceConfig, status, type LoadOptions, type MergedConfig } from "./sync.js";
 import type { McpWriters } from "./write-actions.js";
@@ -363,7 +363,12 @@ async function call(name: ToolName, args: ToolArguments, ctx: McpContext): Promi
   if (name === "explain") {
     const given = args.path ?? "";
     const file = explainFile(ws, p, statusPath(given));
-    if (file === null) throw new Error(notProduced(given, ws.config.profile));
+    if (file === null) {
+      // Spec 61 §6.1: a file a carried skip left to its carrier answers {path, writtenTo, ingredient}
+      const carried = carriedFile(p, statusPath(given));
+      if (carried === null) throw new Error(notProduced(given, ws.config.profile));
+      return { ...carried, warnings: loadWarnings };
+    }
     return { ...file, warnings: loadWarnings };
   }
 

@@ -204,7 +204,7 @@
           "output": [
             ".cursor/rules/<name>.mdc"
           ],
-          "note": "written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; the body unchanged"
+          "note": "written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; the body unchanged; with agents-md among the targets, an always-on rule with the default targets is left to AGENTS.md"
         },
         "agent": {
           "state": "converted",
@@ -262,7 +262,7 @@
             ".github/instructions/<name>.instructions.md",
             ".github/copilot-instructions.md"
           ],
-          "note": "a scoped rule to .github/instructions/ with applyTo from fileMatchPattern; every always-on rule joined into .github/copilot-instructions.md; a manual or an auto rule has no Copilot equivalent and is skipped with a warning; VS Code also reads .claude/rules/, so with claude-code on it loads a scoped rule twice"
+          "note": "a scoped rule to .github/instructions/ with applyTo from fileMatchPattern; every always-on rule joined into .github/copilot-instructions.md, but with agents-md among the targets an always-on rule with the default targets is left to AGENTS.md; a manual or an auto rule has no Copilot equivalent and is skipped with a warning; VS Code also reads .claude/rules/, so with claude-code on it loads a scoped rule twice"
         },
         "agent": {
           "state": "converted",
@@ -276,7 +276,7 @@
           "output": [
             ".github/prompts/<name>.prompt.md"
           ],
-          "note": "written as a VS Code prompt file with description, argument-hint and agent: agent"
+          "note": "written as a VS Code prompt file with description, argument-hint and agent: agent; with agent-skills among the targets, a command with the default targets is left to .agents/skills/"
         },
         "skill": {
           "state": "unsupported",

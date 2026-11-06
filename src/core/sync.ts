@@ -29,7 +29,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { decodeForScan } from "./secrets.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
-import { appliesTo, effectiveTargets } from "../emitters/shared.js";
+import { appliesTo, carriedPath, carriedTo, effectiveTargets } from "../emitters/shared.js";
 import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
 import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
@@ -375,6 +375,11 @@ export interface Plan {
   } | null;
   /** Paths of planned texts reworded because of agents-md.primary, sorted (spec 41 §4.4); [] with the mode off. */
   reworded: string[];
+  /**
+   * Files a skipping target does not write because a carried skip left their content to the carrier's file (spec 61 §6.1, §9),
+   * sorted by path: what `explain` answers for such a path and what the orphan reason names. [] for a workspace with no new target.
+   */
+  carried: Array<{ path: string; ingredient: string; writtenTo: string }>;
   /**
    * Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off; otherwise holds
    * the hand-written entries that name files the plan does not write.
@@ -1056,7 +1061,24 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
 
   const overrideConflicts = overrideConflictsOf(ws.forge, resolution);
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd, listCiting: [...listCiting].sort() };
+  const carried = carriedFiles(resolution, planned);
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd, listCiting: [...listCiting].sort(), carried };
+}
+
+/** Plan.carried (spec 61 §6.1, §9): for each target the workspace names, the files a carried skip kept it from writing. */
+function carriedFiles(resolution: Resolution, planned: readonly PlannedFile[]): Plan["carried"] {
+  const plannedPaths = new Set(planned.map((f) => f.path));
+  const byPath = new Map<string, { path: string; ingredient: string; writtenTo: string }>();
+  for (const ing of resolution.ingredients) {
+    for (const t of resolution.targets) {
+      const writtenTo = carriedTo(ing.meta, t, resolution);
+      if (writtenTo === null || !appliesTo(ing.meta.targets, t)) continue;
+      const path = carriedPath(t, ing.meta);
+      if (path === null || plannedPaths.has(path) || byPath.has(path)) continue;
+      byPath.set(path, { path, ingredient: path === ".github/copilot-instructions.md" ? "rule/*" : ing.ref, writtenTo });
+    }
+  }
+  return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /**
@@ -1271,7 +1293,9 @@ export function claudeMdBlockedMessage(file: string): string {
  */
 export function orphanReason(p: Plan, statuses: readonly FileStatus[], path: string): string {
   const s = statuses.find((x) => x.path === path);
-  return s !== undefined && primaryOrphan(p, s) ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge";
+  if (s !== undefined && primaryOrphan(p, s)) return "orphan: written to AGENTS.md only (agents-md.primary)";
+  const carried = p.carried.find((c) => c.path === path);
+  return carried ? `orphan: written to ${carried.writtenTo} only` : "orphan: no longer produced by the Forge";
 }
 
 /** Returns true when the orphan is due to agents-md.primary (spec 41 §4.8). */
