@@ -469,19 +469,19 @@ Sections layer the same way, weakest → strongest: the body's default → the p
 
 `craftar targets` prints this matrix from `src/core/capabilities.ts`; a test plans one ingredient of every type for each target and fails when a cell and its emitter disagree. **native** — written in the tool's own place for that type, as the Forge holds it (for `mcp`, judged on the server file); **converted** — written in another form (frontmatter or a banner added, references rewritten, another container format, or folded into a shared file); **unsupported** — not written: `sync` warns and names an ingredient aimed at that target.
 
-| type | `claude-code` | `kiro` | `agents-md` | `cursor` |
-|---|---|---|---|---|
-| `rule` | native | converted | converted | converted |
-| `agent` | native | converted | unsupported | converted |
-| `command` | native | converted | unsupported | unsupported |
-| `skill` | native | converted | unsupported | unsupported |
-| `mcp` | native | native | unsupported | converted |
-| `script` | native | unsupported | unsupported | unsupported |
-| `steering` | unsupported | native | unsupported | unsupported |
-| `hook` | native | unsupported | unsupported | unsupported |
-| `service` | unsupported | unsupported | unsupported | unsupported |
+| type | `claude-code` | `kiro` | `agents-md` | `cursor` | `copilot` |
+|---|---|---|---|---|---|
+| `rule` | native | converted | converted | converted | converted |
+| `agent` | native | converted | unsupported | converted | converted |
+| `command` | native | converted | unsupported | unsupported | converted |
+| `skill` | native | converted | unsupported | unsupported | unsupported |
+| `mcp` | native | native | unsupported | converted | converted |
+| `script` | native | unsupported | unsupported | unsupported | unsupported |
+| `steering` | unsupported | native | unsupported | unsupported | unsupported |
+| `hook` | native | unsupported | unsupported | unsupported | unsupported |
+| `service` | unsupported | unsupported | unsupported | unsupported | unsupported |
 
-**service** — unsupported in all four: a service is aimed at no AI coder (its `targets` defaults to `[]`, and an explicit one is skipped with the usual warning). `sync` writes it under `.craftar/` for no target — see *Local services*.
+**service** — unsupported in all five: a service is aimed at no AI coder (its `targets` defaults to `[]`, and an explicit one is skipped with the usual warning). `sync` writes it under `.craftar/` for no target — see *Local services*.
 
 **claude-code** — emits `.claude/rules|agents|commands|skills|scripts|hooks` and `.mcp.json` from the Forge (frontmatter kept byte-for-byte). Each MCP server is written exactly as the Forge holds it, undeclared keys included, in its own key order — in a schema 4 Forge with the params its ingredient declares rendered into its string values (*Server params*). When a written MCP ingredient declares `authEnv` or a written hook declares `registration`, sync also writes `.claude/settings.craftar.example.json` — `env` with each declared name and an empty value, `hooks` with each registration to copy — for the developer to copy into their own, untracked `.claude/settings.json`; a hand-maintained `.claude/settings.example.json` is never touched; `kiro` and `agents-md` write no counterpart. Existing files keep their line endings and BOM; new files are LF without a BOM. Steering is Kiro-only (its `targets` default to `[kiro]`); one aimed at `claude-code` explicitly (`targets: "*"` or a list naming it) is skipped with a warning.
 
@@ -499,6 +499,8 @@ steering = `inclusion` frontmatter + `GENERATED` banner + rule body, with `.clau
 - Below `schema: 5` the key is not read (set to `true` it warns, and the mode is off); a value that is not a boolean, or the mode with no `agents-md` target, warns and leaves it off. **A workspace that does not set the key sees no change at all.** The key is reserved: `forge unify` never extracts into it and `import` never infers it.
 
 **cursor** — emits `.cursor/rules/*.mdc` (rules in Cursor's MDC format with frontmatter), `.cursor/agents/*.json` (agents with `instructions` and tool restrictions), `.cursor/prompts/*.md` (commands), and `.vscode/mcp.json` (MCP servers in VS Code's format). Rules add an MDC frontmatter block (`---\ndescription: …\nglobs: …\nalwaysApply: …\n---`) before the body; `globs` is the rule's `fileMatchPattern` (list or single-item string), `alwaysApply` is `true` for `inclusion: always`, `false` otherwise, and `description` is the rule's `description` field when present. Agents map tools to their Cursor equivalents and include an `agentInstructions.md` file alongside each JSON; tools have no Cursor field and are dropped with a warning. Commands become prompt files under `.cursor/prompts/`, the command's `description` as a YAML frontmatter `description` field when present, followed by the body. Steering has no Cursor equivalent: one aimed at `cursor` explicitly is skipped with a warning. MCP servers are written to `.vscode/mcp.json` in VS Code's format — `servers.<name>` with `type: "stdio"`, `command`, `args`, and `env` (when present); Cursor variables like `${workspaceFolder}` pass through unchanged. Scripts and hooks have no Cursor equivalent: they are skipped with a warning. References to `.claude/rules/<x>.md` in bodies are rewritten to `.cursor/rules/<x>.mdc`.
+
+**copilot** — emits `.github/instructions/*.instructions.md` (rules as Copilot instruction files), `.github/agents/*.md` (agents), `.github/prompts/*.prompt.md` (commands), and `.vscode/mcp.json` (MCP servers). Rules add YAML frontmatter: `description` when the rule has one, `applyTo` as a JSON array when the rule is `fileMatch` inclusion. Agents keep `name` and `description` in frontmatter; tools have no Copilot field and are dropped with a warning. Commands add `description` as YAML frontmatter when present, body unchanged. MCP servers are written under the `servers` key with `type: "stdio"`, `command`, `args` (when non-empty), and `env` (when non-empty). Skills, scripts, hooks and steering have no Copilot equivalent: they are skipped with a warning.
 
 **The rules index** (`schema: 7`). Each target writes the list with the references it writes for `.claude/rules/<x>.md` in a body: the `.claude/` and `AGENTS.md` lists name a rule `.claude/rules/<x>.md` when `claude-code` writes it, `.kiro/steering/<x>.md` when only `kiro` does and `AGENTS.md (rule: <x>)` when only `AGENTS.md` holds it; the `.kiro/` list names it `.kiro/steering/<x>.md` when `kiro` writes it (or a steering ingredient of that name), `.claude/rules/<x>.md` when only `claude-code` does and `AGENTS.md (rule: <x>)` when only `AGENTS.md` holds it. A path is in backticks; `AGENTS.md (rule: <x>)` is not. A rule no target of the workspace writes is left out, with no warning — so in a workspace without `agents-md` a rule aimed at `agents-md` alone is not listed. Under `agents-md.primary` an always-on rule with the default `targets` is listed as `AGENTS.md (rule: <x>)` in the other two lists. The `.claude/` and `AGENTS.md` lists are LF, the `.kiro/` list keeps the file's line endings — LF for a new file — as the rest of each file. `craftar explain <path>` names an indexed file's list (`index       craftar.rules.index (<n> rules)`), except for `AGENTS.md`, which is not one ingredient, and `drift promote` refuses a hand edit of one (D21).
 
