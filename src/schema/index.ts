@@ -1152,13 +1152,19 @@ export const LockEntrySchemaV4 = z.object({
 export const LockSchemaV4 = z.object({
   schema: z.literal(4),
   forge: z.object({
+    /** craftar.yaml › forge as written (after the local merge); never holds credentials (spec 13 §4.3). */
     source: z.string(),
+    /** The requested ref; null when none was given or the Forge is a path. */
     ref: z.string().nullable(),
+    /** The resolved commit; null for a path Forge without git. */
     commit: z.string().nullable(),
   }),
   profile: z.string(),
+  /** Resolution.recipes: resolved, in application order (extends parents included). */
   recipes: z.array(z.string()),
+  /** All targets, including native targets like `cursor` (spec 61 §7). */
   targets: z.array(TargetSchema),
+  /** When the lock's content last changed (Ruling 10). */
   generatedAt: z.string(),
   files: z.array(LockEntrySchemaV4),
 });
