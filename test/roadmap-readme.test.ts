@@ -33,7 +33,7 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
 
 
 // The user's ruling of 2026-11-06: the README status becomes a short paragraph.
-const STATUS = "> Status: **1.0.0** — phases 0, 1 and 2 done: the foundations, the client profile and the environment. `import`, `sync`, `status`, `diff`, `explain` and `ls` work end to end for the `claude-code` and `kiro` targets and are validated byte for byte against a real workspace (see *Oracle*); `agents-md` is emitted too (see *Targets*). A Forge declares the `schema:` it needs, from 1 to 15, each level opt-in and refused by an older craftar. Every command is in *Commands*, what each release changed is in *Upgrading*, and what 1.0.0 promises to keep stable is in *Compatibility*.";
+const STATUS = "> Status: **1.1.0** — phases 0, 1 and 2 done: the foundations, the client profile and the environment. `import`, `sync`, `status`, `diff`, `explain` and `ls` work end to end for the `claude-code` and `kiro` targets and are validated byte for byte against a real workspace (see *Oracle*); `agents-md` is emitted too, and since 1.1.0 `cursor`, `copilot` and `agent-skills` (see *Targets*). A Forge declares the `schema:` it needs, from 1 to 15, each level opt-in and refused by an older craftar. Every command is in *Commands*, what each release changed is in *Upgrading*, and what 1.0.0 promises to keep stable is in *Compatibility*.";
 const h2 = lines.filter((l) => l.startsWith("## "));
 
 describe("README — 1.0.0", () => {
