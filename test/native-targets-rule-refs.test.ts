@@ -84,3 +84,21 @@ describe("spec 61 §10 — the rules index in a new target's rule bodies (schema
     expect(p.warnings.filter((w) => w.includes("craftar.rules.index"))).toEqual([]);
   });
 });
+
+describe("agent-skills — references copied as written are scanned, never rewritten", () => {
+  const skill = (body: string): IngredientSpec => ({ meta: { type: "skill", name: "docs", layout: "dir" }, files: { "SKILL.md": `---\nname: docs\ndescription: Docs\n---\n${body}` } });
+  const cmd = (body: string): IngredientSpec => ({ meta: { type: "command", name: "review", description: "Review" }, files: { "command.md": body } });
+
+  it("[cursor, agent-skills]: a reference to a rule no target writes at .claude/rules/ is kept and named by path and line", async () => {
+    const { p, text } = await planned(["cursor", "agent-skills"], [skill("Read .claude/rules/style.md.\n"), cmd("See .claude/rules/style.md.\n"), style()]);
+    expect(text(".agents/skills/docs/SKILL.md")).toContain("Read .claude/rules/style.md.");
+    expect(p.warnings).toContain(
+      "agent-skills: 2 reference(s) left as written in files craftar copies: .agents/skills/docs/SKILL.md:5 (style), .agents/skills/review/SKILL.md:6 (style)",
+    );
+  });
+
+  it("[claude-code, agent-skills]: a rule claude-code writes is a live reference — nothing is said", async () => {
+    const { p } = await planned(["claude-code", "agent-skills"], [skill("Read .claude/rules/style.md.\n"), style(["claude-code"])]);
+    expect(p.warnings.filter((w) => w.startsWith("agent-skills:"))).toEqual([]);
+  });
+});
