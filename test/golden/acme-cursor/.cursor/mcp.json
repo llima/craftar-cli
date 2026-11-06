@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "api": {
+      "command": "npx",
+      "args": [
+        "api"
+      ],
+      "env": {
+        "TOKEN": "${env:API_TOKEN}",
+        "MODE": "${MODE:-dev}"
+      }
+    }
+  }
+}
