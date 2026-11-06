@@ -199,7 +199,7 @@ export async function decide(
 ): Promise<Decision> {
   // The Forge root, for the file an I12 names: every base lives at <forge>/ingredients/<folder>/<name>.
   const schema = ctx.forge?.manifest.schema ?? 1;
-  const parseOpts = { targets: readsTargetSections({ schema }), targetSchema: ({ schema }).schema };
+  const parseOpts = { targets: readsTargetSections({ schema }), targetSchema: schema };
   const owner = ctx.sourceTarget;
   const base = await readBase(dir, reader, path.resolve(dir, "..", "..", ".."), parseOpts, schema);
   // E32.1: a rule's description is left out of the comparison on the source's side too (drift promote's source carries the

@@ -588,7 +588,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
   const declared = new Map<string, Set<string>>(); // section key → names declared by resolved ingredients
   const byRef: Plan["sections"] = new Map();
   let firstMarker: string | null = null;
-  const parseOpts = { targets: readsTargetSections(forge.manifest), targetSchema: (forge.manifest).schema };
+  const parseOpts = { targets: readsTargetSections(forge.manifest), targetSchema: forge.manifest.schema };
   for (const ing of resolution.ingredients) {
     const key = sectionKey(ing.meta);
     const names = declared.get(key) ?? new Set<string>();

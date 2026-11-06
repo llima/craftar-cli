@@ -81,7 +81,7 @@ export async function planFrom(
   await assertTextMergeable(base, variant);
 
   // Build parseOpts for this Forge schema (Spec 41 Part B §5.2).
-  const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }), targetSchema: ({ schema: forgeSchema }).schema };
+  const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }), targetSchema: forgeSchema };
 
   // Build `declared`: every section name the ingredient already declares, in any body file (spec 12 §4.2, 0.8.2).
   const declared = new Set<string>();
@@ -405,7 +405,7 @@ export async function applyPlan(
   const profileSections = opts.profileSections ?? {};
   const forgeSchema = opts.forgeSchema;
   // Build parseOpts for this Forge schema (Spec 41 Part B §5.2).
-  const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }), targetSchema: ({ schema: forgeSchema }).schema };
+  const parseOpts: ParseSectionsOptions = { targets: readsTargetSections({ schema: forgeSchema }), targetSchema: forgeSchema };
 
   // Ruling 29 (spec §8 refusal 7, in both directions): the plan must cover every file the diff
   // has — paired, base-only and variant-only — each exactly once. The walk below only visits the

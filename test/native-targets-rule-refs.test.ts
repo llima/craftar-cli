@@ -50,6 +50,12 @@ describe("spec 61 §10 — references in cursor bodies", () => {
     expect(p.warnings).toContain("cursor: 1 reference(s) to rule files this workspace does not have — reworded: .claude/rules/nope.md (in rule/api; no such rule)");
   });
 
+  it("[cursor]: a link to a rule the workspace lacks is reworded and warned, never a failed plan", async () => {
+    const { p, text } = await planned(["cursor"], [api("See [Nope](.claude/rules/nope.md).\n")]);
+    expect(text(".cursor/rules/api.mdc")).toContain("rule not in this workspace");
+    expect(p.warnings.some((w) => w.startsWith("cursor:") && w.includes(".claude/rules/nope.md"))).toBe(true);
+  });
+
   it("an agent body is resolved too", async () => {
     const helper: IngredientSpec = { meta: { type: "agent", name: "helper", description: "Helps" }, files: { "agent.md": "Read .claude/rules/style.md.\n" } };
     const { text } = await planned(["cursor"], [helper, style()]);

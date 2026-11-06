@@ -1622,7 +1622,7 @@ async function writeIngredient(
     const variantDir = path.join(forge, "ingredients", folder, name);
     const indexTarget = meta.type === "rule" ? "claude-code" : meta.type === "steering" ? "kiro" : undefined;
     if (run?.ctx.forge && readsRulesIndex(run.ctx.forge.manifest) && run.indexExpand && indexTarget && (await stage.exists(path.join(variantDir, "ingredient.yaml")))) {
-      const v = await readBase(variantDir, stage.reader(), forge, { targets: readsTargetSections(run.ctx.forge.manifest), targetSchema: (run.ctx.forge.manifest).schema }, run.ctx.forge.manifest.schema);
+      const v = await readBase(variantDir, stage.reader(), forge, { targets: readsTargetSections(run.ctx.forge.manifest), targetSchema: run.ctx.forge.manifest.schema }, run.ctx.forge.manifest.schema);
       if ([...v.texts.values()].some((t) => RULES_INDEX_LINE.test(t))) {
         const key = sectionKey(v.meta);
         const S: Record<string, string> = { ...valuesAt(run.ctx.RS, key), ...valuesAt(run.ctx.PS, key), ...valuesAt(run.ctx.WS, key) };
@@ -1657,7 +1657,7 @@ async function writeIngredient(
     // A base holding {{craftar.rules.index}} that becomes a new variant: the list is frozen there (spec 44 §4.8)
     // The variant now has the expanded (frozen) list instead of the dynamic placeholder.
     if (run?.ctx && run.ctx.forge && readsRulesIndex(run.ctx.forge.manifest) && (meta.type === "rule" || meta.type === "steering")) {
-      const parseOpts = { targets: readsTargetSections(run.ctx.forge.manifest), targetSchema: (run.ctx.forge.manifest).schema };
+      const parseOpts = { targets: readsTargetSections(run.ctx.forge.manifest), targetSchema: run.ctx.forge.manifest.schema };
       const baseDir = path.join(forge, "ingredients", folder, as);
       if (await stage.exists(path.join(baseDir, "ingredient.yaml"))) {
         const baseForPlaceholder = await readBase(baseDir, stage.reader(), forge, parseOpts, run.ctx.forge.manifest.schema);
@@ -1816,7 +1816,7 @@ async function decideLocal(
       // Spec 51 §5.3: a local belongs to one profile, so it is rewritten whole, as a variant no other profile resolves is;
       // each `{{key}}` and section it held is said by name, never by value.
       const schema = forge.manifest.schema;
-      const old = await readBase(local.dir, stage.reader(), stage.root, { targets: readsTargetSections(forge.manifest), targetSchema: (forge.manifest).schema }, schema);
+      const old = await readBase(local.dir, stage.reader(), stage.root, { targets: readsTargetSections(forge.manifest), targetSchema: forge.manifest.schema }, schema);
       const fresh = Object.values(files).filter((c): c is string => typeof c === "string").join("\n");
       const kept = citedKeys(new Map(Object.entries(files).filter((e): e is [string, string] => typeof e[1] === "string")));
       const held = citedKeys(old.texts);

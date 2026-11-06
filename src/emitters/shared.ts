@@ -475,7 +475,6 @@ export function resolveRuleRefs(
       // agents-md mode (spec 15 §4.3); a new target's own mode reads K1 as B (its own file), K2 as A, K3 as C (spec 61 §10)
       const own = isOwnMode(mode);
       const st: RuleRefState = own ? (({ K1: "B", K2: "A", K3: "C" } as Partial<Record<RuleRefState, RuleRefState>>)[state] ?? state) : state;
-      const bFile = own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
       switch (st) {
         case "A":
           // State A: link unchanged, but text is now resolved like a token (spec 20 §4.1)
@@ -486,9 +485,13 @@ export function resolveRuleRefs(
             continue;  // No change needed
           }
           break;
-        case "B":
+        case "B": {
+          // Computed here only: B means the rule exists and the citing target writes it (K1 in an own mode), so `rule` is set and
+          // the mode is one that writes rules — a link to a rule the workspace lacks, or in codex, never reaches this line.
+          const bFile = own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
           replacement = `[${resolvedText}](${bFile}${frag ?? ""})`;
           break;
+        }
         case "C":
           replacement = `[${resolvedText}](AGENTS.md)`;
           break;

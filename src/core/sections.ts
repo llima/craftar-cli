@@ -1,5 +1,5 @@
 import { NO_LISTS, type ListContext } from "./list-params.js";
-import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, LEGACY_TARGETS, type Owner, type Target, isLegacyTarget } from "../schema/index.js";
+import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
 import { FORGE_MANIFEST } from "./forge.js";
 import { allowsTarget, nativeTargetNearMiss } from "./native-targets.js";
 import { substitute } from "./resolve.js";

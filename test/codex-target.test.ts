@@ -156,6 +156,15 @@ describe("the codex emitter", () => {
     expect(withMd.files.find((x) => x.path === ".codex/agents/reviewer.toml")!.content.toString("utf8")).toContain("Read AGENTS.md (rule: style) first.");
   });
 
+  it("a Markdown link to a rule resolves too, and never fails the plan: claude-code's file, AGENTS.md, or not in this workspace", async () => {
+    const body = "See [Style](.claude/rules/style.md) and [Nope](.claude/rules/nope.md).\n";
+    const text = async (targets: string[]) =>
+      (await planOf(await ws(16, targets, [reviewer({}, body), style]))).files.find((x) => x.path === ".codex/agents/reviewer.toml")!.content.toString("utf8");
+    expect(await text(["claude-code", "codex"])).toContain("See [Style](.claude/rules/style.md)");
+    expect(await text(["agents-md", "codex"])).toContain("See [Style](AGENTS.md)");
+    expect(await text(["agents-md", "codex"])).toContain("rule not in this workspace");
+  });
+
   it("through cells: a rule warns only without agents-md (or when its targets leave agents-md out); a command and a skill only without agent-skills", async () => {
     const command: IngredientSpec = { meta: { type: "command", name: "review", description: "Review" }, files: { "command.md": "Review it.\n" } };
     const skill: IngredientSpec = { meta: { type: "skill", name: "docs", layout: "dir" }, files: { "SKILL.md": "---\nname: docs\ndescription: Docs\n---\nDocs.\n" } };

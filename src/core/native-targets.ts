@@ -5,7 +5,6 @@
  */
 
 import {
-  TARGETS,
   LEGACY_TARGETS,
   SLICE_1_TARGETS,
   type Owner,
@@ -28,9 +27,6 @@ export const TARGET_SINCE: Record<Target, number> = {
   "agent-skills": FORGE_SCHEMA_NATIVE_TARGETS,
   codex: FORGE_SCHEMA_SLICE_2_TARGETS,
 };
-
-/** The targets that require a Forge schema above 1: every target that is not a legacy one. */
-export const NATIVE_TARGETS = TARGETS.filter((t) => !(LEGACY_TARGETS as readonly string[]).includes(t)) as readonly Target[];
 
 /** Whether a Forge at `schema` may name `target`. The ONE comparison with the targets' gates. */
 export function allowsTarget(schema: number, target: Target): boolean {

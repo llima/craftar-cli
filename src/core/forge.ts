@@ -221,7 +221,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
           const left = await unnamedSectionFiles(folder, `profiles/${d.name}`, r.files);
           if (left.length) unnamed.set(p.name, left);
         }
-        // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor, copilot, agent-skills) in a profile's `targets` is a near miss.
+        // Spec 61 §7: a target below its schema gate (TARGET_SINCE) in a profile's `targets` is a near miss.
         checkTargets(declaring, p.targets);
         profiles.set(p.name, p);
         profileFiles.set(p.name, declaring);

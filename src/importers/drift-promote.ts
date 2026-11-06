@@ -877,7 +877,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let flattenedParams: string[] = [];
   let flattenedSections: string[] = [];
 
-  const parseOpts = { targets: readsTargetSections(forge.manifest), targetSchema: (forge.manifest).schema };
+  const parseOpts = { targets: readsTargetSections(forge.manifest), targetSchema: forge.manifest.schema };
   const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts, forge.manifest.schema);
   const ingKey = sectionKey(X.meta);
   const RSk = ctx.RS[ingKey] ?? {};
