@@ -16,9 +16,10 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
 
 /**
  * The MCP file each target writes (spec 42 §5.2: shared by the emitters and doctor's mcp-launcher).
- * agents-md and agent-skills write no MCP file (their mcp cells are unsupported), so they have no entries.
+ * agents-md, agent-skills and codex write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` is shared, D5),
+ * so they have no entries.
  */
-export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills">, string>;
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
 
 /** What effectiveTargets reads of a resolution: agents-md.primary and the workspace's targets. */
 export interface TargetsView {
@@ -151,11 +152,22 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: T
  * Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target that writes rules — cursor or copilot
  * (spec 61 §10), where K1 generalises to "the file the citing target itself writes".
  */
-export type RefMode = "agents-md" | "kiro" | "cursor" | "copilot";
+/** The new targets' own modes (spec 61 §10): K1 is the file the citing target itself writes, then claude-code's, then AGENTS.md. */
+export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity";
+export type RefMode = "agents-md" | "kiro" | OwnMode;
 
-/** Whether a target that writes rules in its own file writes this one there (spec 61 §5.2: copilot skips a manual or an auto rule). */
-function ownWrites(mode: "cursor" | "copilot", meta: Ingredient): boolean {
-  return meta.type === "rule" && (mode === "cursor" || meta.inclusion === "always" || meta.inclusion === "fileMatch");
+/** Whether a reference mode is a new target's own mode. */
+export function isOwnMode(mode: RefMode): mode is OwnMode {
+  return mode === "cursor" || mode === "copilot" || mode === "codex" || mode === "antigravity";
+}
+
+/**
+ * Whether a target that writes rules in its own file writes this one there (spec 61 §5.2): cursor and antigravity every rule, copilot
+ * an always-on or a scoped one (it skips a manual or an auto rule), codex none (it reads AGENTS.md only).
+ */
+function ownWrites(mode: OwnMode, meta: Ingredient): boolean {
+  if (meta.type !== "rule" || mode === "codex") return false;
+  return mode === "cursor" || mode === "antigravity" || meta.inclusion === "always" || meta.inclusion === "fileMatch";
 }
 
 /** Rule reference state (spec 15 §4.2 for agents-md, spec 17 §4.2 for kiro). */
@@ -178,7 +190,7 @@ export function ruleRefState(
   const hasMd = targets.includes("agents-md");
   const rule = rulesByName.get(name);
   const ruleTargets = effective.get(name);
-  if (mode === "cursor" || mode === "copilot") {
+  if (isOwnMode(mode)) {
     // Spec 61 §10: K1 is the file the citing target writes; then claude-code's, then AGENTS.md, as for kiro (no steering here)
     if (rule && ruleTargets && targets.includes(mode) && appliesTo(ruleTargets, mode) && ownWrites(mode, rule.meta)) return "K1";
     if (rule && ruleTargets && hasCc && appliesTo(ruleTargets, "claude-code")) return "K2";
@@ -237,7 +249,7 @@ export function ruleReference(
   const state = ruleRefState(name, lookup, targets, mode);
   const hasCc = targets.includes("claude-code");
   const rule = lookup.rulesByName.get(name);
-  if (mode === "cursor" || mode === "copilot") {
+  if (isOwnMode(mode)) {
     switch (state) {
       case "K1": return { state, text: ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) };
       case "K2": return { state, text: `.claude/rules/${name}.md` };  // unchanged
@@ -461,7 +473,7 @@ export function resolveRuleRefs(
       }
     } else {
       // agents-md mode (spec 15 §4.3); a new target's own mode reads K1 as B (its own file), K2 as A, K3 as C (spec 61 §10)
-      const own = mode === "cursor" || mode === "copilot";
+      const own = isOwnMode(mode);
       const st: RuleRefState = own ? (({ K1: "B", K2: "A", K3: "C" } as Partial<Record<RuleRefState, RuleRefState>>)[state] ?? state) : state;
       const bFile = own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
       switch (st) {
@@ -625,8 +637,11 @@ export function outName(m: { name: string; as?: string }): string {
 }
 
 /** The file a target writes for a rule: the path AGENTS.md lists when that target writes it (spec 14). */
-export function ruleFile(target: "claude-code" | "kiro" | "cursor" | "copilot", m: { name: string; as?: string; inclusion?: string }): string {
+export function ruleFile(target: "claude-code" | "kiro" | OwnMode, m: { name: string; as?: string; inclusion?: string }): string {
   if (target === "cursor") return `.cursor/rules/${outName(m)}.mdc`;
+  if (target === "antigravity") return `.agents/rules/${outName(m)}.md`;
+  // Codex writes no rule file (it reads AGENTS.md), so no state names one for it (ownWrites).
+  if (target === "codex") throw new Error("internal: codex writes no rule file");
   // Copilot joins every always-on rule into one file (spec 61 §5.2)
   if (target === "copilot") return m.inclusion === "always" ? ".github/copilot-instructions.md" : `.github/instructions/${outName(m)}.instructions.md`;
   return target === "claude-code" ? `.claude/rules/${outName(m)}.md` : `.kiro/steering/${outName(m)}.md`;
@@ -637,7 +652,7 @@ export function ruleFile(target: "claude-code" | "kiro" | "cursor" | "copilot", 
  * a `.claude/rules/<x>.md` reference names the file the target writes, else claude-code's, else AGENTS.md — then, in a rule body at
  * the index gate, the index expanded with the target's names. `finish` says, in one warning, the references reworded.
  */
-export function ownRuleRefs(ctx: EmitBase, target: "cursor" | "copilot"): { resolve(text: string, citing: string): string; index(text: string, path: string): string; finish(): void } {
+export function ownRuleRefs(ctx: EmitBase, target: OwnMode): { resolve(text: string, citing: string): string; index(text: string, path: string): string; finish(): void } {
   const lookup = buildRuleLookup(ctx.resolution.ingredients, ctx.resolution);
   const dead: RefReport["reworded"] = [];
   const seen = new Set<string>();
@@ -976,7 +991,7 @@ function foldDescription(desc: string): string {
  */
 export function expandRulesIndex(
   text: string,
-  target: "claude-code" | "kiro" | "agents-md" | "cursor" | "copilot",
+  target: "claude-code" | "kiro" | "agents-md" | OwnMode,
   lookup: RuleLookup,
   resolution: Resolution,
 ): ExpandRulesIndexResult {
@@ -1002,7 +1017,7 @@ export function expandRulesIndex(
 
   // Build the index content once (it's the same for all occurrences)
   const rules = resolution.ingredients.filter((ing) => ing.meta.type === "rule");
-  const mode: RefMode = target === "kiro" || target === "cursor" || target === "copilot" ? target : "agents-md";
+  const mode: RefMode = target === "kiro" || isOwnMode(target as RefMode) ? (target as RefMode) : "agents-md";
 
   // Group rules by inclusion for display order
   const alwaysOn: Array<{ name: string; path: string; desc: string | null }> = [];

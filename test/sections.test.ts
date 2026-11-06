@@ -295,23 +295,23 @@ describe("targeted sections (spec 41 Part B §11.3)", () => {
     const problem = "section x: targets= takes one or more of claude-code, kiro, agents-md, cursor, copilot, agent-skills, comma-separated, each once";
 
     // Empty value
-    expect(markerLine(O("x", ""), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", ""), { targets: true, targetSchema: 15 })).toEqual({ kind: "near", problem });
 
     // Unknown target
-    expect(markerLine(O("x", "vscode"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "vscode"), { targets: true, targetSchema: 15 })).toEqual({ kind: "near", problem });
 
     // Duplicate target
-    expect(markerLine(O("x", "kiro,kiro"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "kiro,kiro"), { targets: true, targetSchema: 15 })).toEqual({ kind: "near", problem });
 
     // Trailing comma
-    expect(markerLine(O("x", "kiro,"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "kiro,"), { targets: true, targetSchema: 15 })).toEqual({ kind: "near", problem });
 
     // Wrong case
-    expect(markerLine(O("x", "Kiro"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "Kiro"), { targets: true, targetSchema: 15 })).toEqual({ kind: "near", problem });
 
     // Fake secret token - must not appear in message
     const fakeToken = "zz-secret-zz";
-    const result = markerLine(O("x", fakeToken), { targets: true, nativeTargets: true });
+    const result = markerLine(O("x", fakeToken), { targets: true, targetSchema: 15 });
     expect(result?.kind).toBe("near");
     expect((result as { problem?: string }).problem).toBe(problem);
     expect((result as { problem?: string }).problem).not.toContain(fakeToken);
@@ -442,20 +442,20 @@ describe("native target gate in section markers (spec 61 §7)", () => {
   it("schema 15 with malformed targets=nope → error lists four names including cursor", () => {
     // At schema 15, an invalid target should list all four targets including cursor
     const text = `# Body\n${OPEN_T("intro", "nope")}\nHello.\n${CLOSE}\n`;
-    expect(() => parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: true }))
+    expect(() => parseSections(text, "rule.md", "rule/tone", { targets: true, targetSchema: 15 }))
       .toThrow("section intro: targets= takes one or more of claude-code, kiro, agents-md, cursor, copilot, agent-skills, comma-separated, each once");
   });
 
   it("schema 15 with targets=cursor → accepted", () => {
     // At schema 15, targets=cursor should be accepted
     const text = `# Body\n${OPEN_T("intro", "cursor")}\nHello.\n${CLOSE}\n`;
-    const p = parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: true });
+    const p = parseSections(text, "rule.md", "rule/tone", { targets: true, targetSchema: 15 });
     expect(p.sections).toEqual([{ name: "intro", default: "Hello.\n", line: 2, targets: ["cursor"] }]);
   });
 
   it("schema 15 with targets=claude-code,cursor → accepted", () => {
     const text = `# Body\n${OPEN_T("intro", "claude-code,cursor")}\nHello.\n${CLOSE}\n`;
-    const p = parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: true });
+    const p = parseSections(text, "rule.md", "rule/tone", { targets: true, targetSchema: 15 });
     expect(p.sections).toEqual([{ name: "intro", default: "Hello.\n", line: 2, targets: ["claude-code", "cursor"] }]);
   });
 });

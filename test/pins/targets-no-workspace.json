@@ -366,6 +366,59 @@
           "note": "skipped with a warning when aimed at this target"
         }
       }
+    },
+    {
+      "name": "codex",
+      "inUse": null,
+      "capabilities": {
+        "rule": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agents-md: Codex reads AGENTS.md only, written by the agents-md target"
+        },
+        "agent": {
+          "state": "converted",
+          "output": [
+            ".codex/agents/<name>.toml"
+          ],
+          "note": "name, description and developer_instructions (the body) in TOML; model and tools are not written (the Forge's names are Claude Code's), dropped with a warning"
+        },
+        "command": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agent-skills: Codex reads .agents/skills/, written by the agent-skills target (its own prompts are user-level and deprecated)"
+        },
+        "skill": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agent-skills: Codex reads .agents/skills/, written by the agent-skills target"
+        },
+        "mcp": {
+          "state": "unsupported",
+          "output": [],
+          "note": "not written: Codex's MCP servers live in .codex/config.toml, which holds every other Codex setting — configure them there by hand"
+        },
+        "script": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "steering": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "not written yet: Codex's hooks are reviewed by hand in a trusted project — planned for a later release"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        }
+      }
     }
   ],
   "warnings": []

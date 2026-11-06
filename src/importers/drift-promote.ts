@@ -71,7 +71,6 @@ import { providedRefs } from "./provided.js";
 import { citedKeys, expandedTexts, readBase, sectionNames } from "../core/template-import.js";
 import { RULE_MARKER_LINE, ruleMarker } from "../emitters/agents-md.js";
 import { readsTargetSections } from "../core/sections.js";
-import { readsNativeTargets } from "../core/native-targets.js";
 import { profileSectionFile } from "../core/section-files.js";
 import { paramsFor, recipeOrder, sectionKey } from "../core/resolve.js";
 import { effectiveProfile, slotLabel } from "../core/integrations.js";
@@ -878,7 +877,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   let flattenedParams: string[] = [];
   let flattenedSections: string[] = [];
 
-  const parseOpts = { targets: readsTargetSections(forge.manifest), nativeTargets: readsNativeTargets(forge.manifest) };
+  const parseOpts = { targets: readsTargetSections(forge.manifest), targetSchema: (forge.manifest).schema };
   const base = await readBase(X.dir, stage.reader(), forge.root, parseOpts, forge.manifest.schema);
   const ingKey = sectionKey(X.meta);
   const RSk = ctx.RS[ingKey] ?? {};

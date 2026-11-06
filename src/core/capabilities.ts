@@ -244,6 +244,21 @@ export const CAPABILITIES = {
     hook: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
+  codex: {
+    rule: { state: "unsupported", output: [], note: "through agents-md: Codex reads AGENTS.md only, written by the agents-md target" },
+    agent: {
+      state: "converted",
+      output: [".codex/agents/<name>.toml"],
+      note: "name, description and developer_instructions (the body) in TOML; model and tools are not written (the Forge's names are Claude Code's), dropped with a warning",
+    },
+    command: { state: "unsupported", output: [], note: "through agent-skills: Codex reads .agents/skills/, written by the agent-skills target (its own prompts are user-level and deprecated)" },
+    skill: { state: "unsupported", output: [], note: "through agent-skills: Codex reads .agents/skills/, written by the agent-skills target" },
+    mcp: { state: "unsupported", output: [], note: "not written: Codex's MCP servers live in .codex/config.toml, which holds every other Codex setting — configure them there by hand" },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "not written yet: Codex's hooks are reviewed by hand in a trusted project — planned for a later release" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -297,7 +312,8 @@ const writtenIs: [
   Equal<Written<"cursor">, "rule" | "agent" | "mcp">,
   Equal<Written<"copilot">, "rule" | "agent" | "command" | "mcp">,
   Equal<Written<"agent-skills">, "command" | "skill">,
-] = [true, true, true, true, true, true];
+  Equal<Written<"codex">, "agent">,
+] = [true, true, true, true, true, true, true];
 void writtenIs;
 
 /**
@@ -312,6 +328,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; 
   cursor: { label: "Cursor", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
   copilot: { label: "Copilot", per: "type", carriers: { skill: "agent-skills" } },
   "agent-skills": { label: "Agent Skills", per: "type" },
+  codex: { label: "Codex", per: "type", carriers: { rule: "agents-md", command: "agent-skills", skill: "agent-skills" } },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {

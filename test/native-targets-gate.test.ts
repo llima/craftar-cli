@@ -289,14 +289,14 @@ describe("native targets gate (spec 61 §7)", () => {
     expect(lock.targets).toContain("cursor");
   });
 
-  it("8. craftar.lock schema 5 → readLock throws with upgrade message", { timeout: atLeastWin32(30_000) }, async () => {
+  it("8. craftar.lock schema 6 → readLock throws with upgrade message", { timeout: atLeastWin32(30_000) }, async () => {
     const dir = await tmpDir("craftar-test-lock-");
     cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
 
-    // Write a future lock: schema 5
+    // Write a future lock: schema 6
     await writeFiles(dir, {
       "craftar.lock": JSON.stringify({
-        schema: 5,
+        schema: 6,
         forge: { source: "../forge", ref: null, commit: null },
         profile: "acme",
         recipes: ["base"],
@@ -306,7 +306,7 @@ describe("native targets gate (spec 61 §7)", () => {
       }, null, 2) + "\n",
     });
 
-    await expect(readLock(dir)).rejects.toThrow("declares schema 5, which this craftar does not read — upgrade craftar");
+    await expect(readLock(dir)).rejects.toThrow("declares schema 6, which this craftar does not read — upgrade craftar");
   });
 
   it("11. agent-skills in workspace targets at schema 15 → plans and writes lock schema 4", { timeout: atLeastWin32(60_000) }, async () => {

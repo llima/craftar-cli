@@ -1,7 +1,7 @@
 import { NO_LISTS, type ListContext } from "./list-params.js";
 import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, LEGACY_TARGETS, type Owner, type Target, isLegacyTarget } from "../schema/index.js";
 import { FORGE_MANIFEST } from "./forge.js";
-import { nativeTargetNearMiss } from "./native-targets.js";
+import { allowsTarget, nativeTargetNearMiss } from "./native-targets.js";
 import { substitute } from "./resolve.js";
 import { placeholders } from "./extract.js";
 import { stripBom, toLf } from "./text.js";
@@ -41,15 +41,15 @@ export type MarkerLineResult =
 export interface MarkerLineOptions {
   /** Whether to read `targets=` attribute on section markers. Default: false. */
   targets?: boolean;
-  /** Whether to allow native targets (cursor, copilot, agent-skills) in `targets=`. Default: false. Only relevant when `targets` is true. */
-  nativeTargets?: boolean;
+  /** The Forge's schema, which decides the target names `targets=` takes (`allowsTarget`). Default: 1. Only relevant when `targets` is true. */
+  targetSchema?: number;
 }
 
 /** What a line is to the grammar: an opener (with its name), a closer, a near miss, or text (null). */
 export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineResult {
   const l = line.endsWith("\n") ? line.slice(0, -1) : line;
   const readTargets = opts?.targets ?? false;
-  const allowNativeTargets = opts?.nativeTargets ?? false;
+  const targetSchema = opts?.targetSchema ?? 1;
 
   const targeted = OPEN_TARGETED.exec(l);
   if (targeted && SECTION_NAME.test(targeted[1])) {
@@ -60,7 +60,7 @@ export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineRe
       return { kind: "near", problem: `section ${name} names targets, which a Forge reads only at schema: ${FORGE_SCHEMA_TARGET_SECTIONS} — set schema: ${FORGE_SCHEMA_TARGET_SECTIONS} in ${FORGE_MANIFEST}` };
     }
 
-    const targetsError = validateTargets(name, targetsValue, allowNativeTargets);
+    const targetsError = validateTargets(name, targetsValue, targetSchema);
     if (targetsError) {
       return { kind: "near", problem: targetsError };
     }
@@ -81,11 +81,11 @@ export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineRe
 
 /**
  * Validate targets= value, return error message or undefined if valid.
- * Below the native targets gate, only LEGACY_TARGETS are allowed; a known native target yields
- * a near-miss message pointing at schema 15.
+ * Only the targets the Forge's schema allows are taken (`allowsTarget`); a known target below its gate yields a near-miss message
+ * naming the schema it needs.
  */
-function validateTargets(name: string, value: string, allowNativeTargets: boolean): string | undefined {
-  const allowed = allowNativeTargets ? TARGETS : LEGACY_TARGETS;
+function validateTargets(name: string, value: string, targetSchema: number): string | undefined {
+  const allowed = TARGETS.filter((t) => allowsTarget(targetSchema, t));
   const errorMsg = `section ${name}: targets= takes one or more of ${allowed.join(", ")}, comma-separated, each once`;
 
   if (value === "") return errorMsg;
@@ -96,9 +96,9 @@ function validateTargets(name: string, value: string, allowNativeTargets: boolea
 
   for (const part of parts) {
     // Below the gate, check if it's a known native target (near miss)
-    if (!allowNativeTargets && !isLegacyTarget(part) && (TARGETS as readonly string[]).includes(part)) {
-      // It's a native target like "cursor" but below the schema gate
-      return nativeTargetNearMiss(null, `section ${name} targets=`, part);
+    if ((TARGETS as readonly string[]).includes(part) && !allowsTarget(targetSchema, part as Target)) {
+      // A known target below its schema gate
+      return nativeTargetNearMiss(null, `section ${name} targets=`, part as Target);
     }
     if (!(allowed as readonly string[]).includes(part)) return errorMsg;
     if (seen.has(part)) return errorMsg;
@@ -137,8 +137,8 @@ export interface ParsedSections {
 export interface ParseSectionsOptions {
   /** Whether to read `targets=` attribute on section markers. Default: false. */
   targets?: boolean;
-  /** Whether to allow native targets (cursor, copilot, agent-skills) in `targets=`. Default: false. Only relevant when `targets` is true. */
-  nativeTargets?: boolean;
+  /** The Forge's schema, which decides the target names `targets=` takes (`allowsTarget`). Default: 1. Only relevant when `targets` is true. */
+  targetSchema?: number;
 }
 
 /** Lines that keep their terminator; the last one may have none. */
