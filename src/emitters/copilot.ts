@@ -88,12 +88,17 @@ const ALIASES = new Map<string, string>([
 function mapTools(agent: string, tools: readonly string[], warn: (msg: string) => void): string[] {
   const out: string[] = [];
   for (const raw of tools) {
-    const key = raw.trim().replace(/\(.*\)$/, "").toLowerCase();
+    const trimmed = raw.trim();
+    const key = trimmed.replace(/\(.*\)$/, "").toLowerCase();
     if (!key) continue;
     const alias = ALIASES.get(key);
     if (alias === undefined) {
-      warn(`copilot: agent "${agent}": tool "${raw.trim()}" has no Copilot alias; dropped`);
+      warn(`copilot: agent "${agent}": tool "${trimmed}" has no Copilot alias; dropped`);
       continue;
+    }
+    // Warn when a scoped tool (has a (…) part) maps to an alias — the scope is dropped
+    if (/\(.*\)$/.test(trimmed)) {
+      warn(`copilot: agent "${agent}": tool "${trimmed}" maps to ${alias}; its scope is dropped`);
     }
     if (!out.includes(alias)) out.push(alias);
   }

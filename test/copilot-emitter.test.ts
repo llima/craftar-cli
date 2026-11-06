@@ -163,6 +163,36 @@ describe("copilot emitter (spec 61 §3.4, §5.2)", () => {
     expect(p.warnings).toContain('copilot: agent "safe": tool "constructor" has no Copilot alias; dropped');
   });
 
+  // Test 4c: agent with scoped tool (Bash(git status:*)) warns that scope is dropped
+  it("4c. agent: scoped tool maps to alias but warns that scope is dropped", async () => {
+    const s = kept(await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "agent", name: "git-helper", description: "Git helper", tools: ["Bash(git status:*)"] },
+            files: { "agent.md": "Git helper.\n" },
+          },
+        ],
+        recipes: [recipe("base", ["agent/git-helper"])],
+        profiles: [profile("acme", ["base"], ["copilot"])],
+      },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const agentFile = p.files.find((f) => f.path === ".github/agents/git-helper.agent.md");
+    expect(agentFile).toBeDefined();
+    // The scoped tool should map to execute and warn about scope being dropped
+    expect(agentFile!.content.toString("utf8")).toBe(
+      '---\nname: "git-helper"\ndescription: "Git helper"\ntools: ["execute"]\n---\nGit helper.\n'
+    );
+    // Warning about scope being dropped
+    expect(p.warnings).toContain('copilot: agent "git-helper": tool "Bash(git status:*)" maps to execute; its scope is dropped');
+  });
+
   // Test 5: command with description, argumentHint, and agent: agent
   it("5. command: description, argument-hint, agent: agent", async () => {
     const s = kept(await scenario(
