@@ -1,45 +1,55 @@
-import { serializeFrontmatter } from "../core/frontmatter.js";
+import { envReferences, mcpServers, MCP_FILE, outName, textFile } from "./shared.js";
 import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
-import { mcpServers, MCP_FILE, outName, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
 
 /**
- * Copilot target (spec 61 §3.4, §5.2): `.github/instructions/<name>.instructions.md`,
- * `.github/agents/<name>.md`, `.github/prompts/<name>.prompt.md`, `.vscode/mcp.json`.
- * Text files keep the line endings of the file they replace (LF when new) and never carry a BOM.
+ * GitHub Copilot target (spec 61 §3.4, §5.2): `.github/instructions/<name>.instructions.md`, `.github/copilot-instructions.md`,
+ * `.github/agents/<name>.agent.md`, `.github/prompts/<name>.prompt.md`, `.vscode/mcp.json`.
+ * Skills reach Copilot through the agent-skills target; the matrix warns for them here.
  */
 export const copilot: Emitter<"copilot"> = {
   target: "copilot",
   async emit(ctx) {
     const out: PlannedFile[] = [];
     const t = "copilot";
+    const always: string[] = [];
     const mcp: ResolvedIngredient[] = [];
     for (const ing of ctx.aimed) {
       const m = ctx.meta(ing);
       switch (m.type) {
         case "rule": {
-          const path = `.github/instructions/${outName(m)}.instructions.md`;
-          const body = await ctx.text(ing, m.file, t);
-          out.push(await textFile(ctx, path, ruleFrontmatter(m) + "\n" + body, t, ing.ref, { keepBom: false }));
+          if (m.inclusion === "always") {
+            always.push(await ctx.text(ing, m.file, t));
+          } else if (m.inclusion === "fileMatch") {
+            const items = Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern : [m.fileMatchPattern ?? "**"];
+            if (items.some((p) => p.includes(","))) ctx.warn(`copilot: rule ${ing.ref}: a glob holds a comma, which Copilot reads as a separator`);
+            const fm = `---\napplyTo: ${JSON.stringify(items.join(","))}\n---\n`;
+            const body = await ctx.text(ing, m.file, t);
+            out.push(await textFile(ctx, `.github/instructions/${outName(m)}.instructions.md`, fm + "\n" + body, t, ing.ref, { keepBom: false }));
+          } else {
+            ctx.warn(`copilot: rule ${ing.ref} (${m.inclusion}) has no Copilot equivalent — skipped`);
+          }
           break;
         }
         case "agent": {
-          const path = `.github/agents/${outName(m)}.md`;
-          const body = await ctx.text(ing, m.file, t);
-          if ((m.tools?.length ?? 0) > 0)
-            ctx.warn(`copilot: agent "${outName(m)}": tools have no Copilot field and are dropped`);
-          // Never the agent's frontmatterRaw: that is Claude Code's frontmatter.
-          const doc = serializeFrontmatter({ name: outName(m), description: m.description }, body);
-          out.push(await textFile(ctx, path, doc, t, ing.ref, { keepBom: false }));
+          const tools = mapTools(outName(m), m.tools, (msg) => ctx.warn(msg));
+          const lines = [`name: ${JSON.stringify(outName(m))}`];
+          if (m.description) lines.push(`description: ${JSON.stringify(m.description)}`);
+          if (tools.length) lines.push(`tools: ${JSON.stringify(tools)}`);
+          if (m.model) lines.push(`model: ${JSON.stringify(m.model)}`);
+          const doc = `---\n${lines.join("\n")}\n---\n` + (await ctx.text(ing, m.file, t));
+          out.push(await textFile(ctx, `.github/agents/${outName(m)}.agent.md`, doc, t, ing.ref, { keepBom: false }));
           break;
         }
         case "command": {
-          const path = `.github/prompts/${outName(m)}.prompt.md`;
-          const body = await ctx.text(ing, m.file, t);
-          // Description as frontmatter when present.
-          const doc = m.description ? serializeFrontmatter({ description: m.description }, body) : body;
-          out.push(await textFile(ctx, path, doc, t, ing.ref, { keepBom: false }));
+          const lines: string[] = [];
+          if (m.description) lines.push(`description: ${JSON.stringify(m.description)}`);
+          if (m.argumentHint) lines.push(`argument-hint: ${JSON.stringify(m.argumentHint)}`);
+          lines.push("agent: agent");
+          if (m.allowedTools) ctx.warn(`copilot: command "${outName(m)}": allowed-tools has no prompt-file field; dropped`);
+          const doc = `---\n${lines.join("\n")}\n---\n` + (await ctx.text(ing, m.file, t));
+          out.push(await textFile(ctx, `.github/prompts/${outName(m)}.prompt.md`, doc, t, ing.ref, { keepBom: false }));
           break;
         }
         case "mcp":
@@ -51,47 +61,41 @@ export const copilot: Emitter<"copilot"> = {
         }
       }
     }
+    if (always.length) {
+      // Every always-on rule, in resolution order, one blank line between bodies; the file belongs to no one rule.
+      const text = always.map((b) => b.replace(/\n+$/, "")).join("\n\n") + "\n";
+      out.push(await textFile(ctx, ".github/copilot-instructions.md", text, t, "rule/*", { keepBom: false }));
+    }
     if (mcp.length) {
-      // mcpServers renders and runs credentialIn first; the reshape keeps type: stdio.
-      const servers = copilotMcpServers(mcpServers(ctx, t, MCP_FILE.copilot, mcp));
+      // mcpServers renders and runs credentialIn first; each server is kept whole, only `${NAME}` becomes `${env:NAME}`.
+      const servers = envReferences(mcpServers(ctx, t, MCP_FILE.copilot, mcp));
       out.push(await textFile(ctx, MCP_FILE.copilot, JSON.stringify({ servers }, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
     }
     return out;
   },
 };
 
-/**
- * Copilot rules frontmatter: applyTo from fileMatchPattern (spec 61 §3.4).
- * description when present, then applyTo when fileMatch inclusion.
- * Always returns a frontmatter block (even if minimal) to ensure the output differs from the source.
- */
-function ruleFrontmatter(m: Extract<Ingredient, { type: "rule" }>): string {
-  const lines: string[] = [];
-  if (m.description) lines.push(`description: ${JSON.stringify(m.description)}`);
-  if (m.inclusion === "fileMatch") {
-    const p = m.fileMatchPattern;
-    // applyTo is a list of globs
-    const patterns = Array.isArray(p) ? p : [p ?? "**"];
-    lines.push(`applyTo: ${JSON.stringify(patterns)}`);
-  }
-  // Always emit frontmatter to mark this as a Copilot instruction file
-  return `---\n${lines.join("\n")}${lines.length > 0 ? "\n" : ""}---\n`;
-}
+/** Copilot's tool aliases (docs.github.com, custom agents configuration), keyed by a lower-cased Claude Code tool name. */
+const ALIASES = new Map<string, string>([
+  ["read", "read"], ["edit", "edit"], ["write", "edit"], ["multiedit", "edit"], ["notebookedit", "edit"],
+  ["grep", "search"], ["glob", "search"], ["ls", "search"],
+  ["bash", "execute"], ["shell", "execute"],
+  ["webfetch", "web"], ["websearch", "web"],
+  ["task", "agent"], ["agent", "agent"],
+  ["todowrite", "todo"],
+]);
 
-/**
- * Reshape the shared mcpServers output into Copilot's .vscode/mcp.json format:
- * { servers: { <name>: { type: "stdio", command, args, env } } }
- */
-function copilotMcpServers(servers: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [name, server] of Object.entries(servers)) {
-    const s = server as { command?: string; args?: string[]; env?: Record<string, string> };
-    result[name] = {
-      type: "stdio",
-      command: s.command,
-      ...(s.args && s.args.length > 0 ? { args: s.args } : {}),
-      ...(s.env && Object.keys(s.env).length > 0 ? { env: s.env } : {}),
-    };
+function mapTools(agent: string, tools: readonly string[], warn: (msg: string) => void): string[] {
+  const out: string[] = [];
+  for (const raw of tools) {
+    const key = raw.trim().replace(/\(.*\)$/, "").toLowerCase();
+    if (!key) continue;
+    const alias = ALIASES.get(key);
+    if (alias === undefined) {
+      warn(`copilot: agent "${agent}": tool "${raw.trim()}" has no Copilot alias; dropped`);
+      continue;
+    }
+    if (!out.includes(alias)) out.push(alias);
   }
-  return result;
+  return out;
 }

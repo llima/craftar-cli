@@ -1053,8 +1053,8 @@ export function flatSkillWarning(names: string[], prefix = "claude-code"): strin
 /* ------------------------------------------------------------------ */
 
 /**
- * Cursor's predefined variables (spec 61 §3.3): these must NOT be transformed to `${env:…}`.
- * See: https://docs.cursor.com/context/rules#predefined-variables
+ * Cursor's and VS Code's predefined variables (spec 61 §3.3, §3.4): these must NOT be transformed to `${env:…}`.
+ * See: https://cursor.com/docs/context/mcp
  */
 const PREDEFINED = new Set(["workspaceFolder", "workspaceFolderBasename", "userHome", "pathSeparator"]);
 

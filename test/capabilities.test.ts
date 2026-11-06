@@ -31,10 +31,15 @@ async function makeCapabilityForge(root: string, schema: number): Promise<void> 
 
   // Each ingredient type with a unique name and a reference in its body
   const ingredients: IngredientSpec[] = [
-    // rule
+    // rule (always-on, goes to copilot-instructions.md for copilot)
     {
       meta: { type: "rule", name: "cap-rule", targets: "*" },
       files: { "rule.md": `# Rule\nSee ${REFERENCE} for conventions.\n` },
+    },
+    // rule (scoped, goes to .github/instructions/ for copilot)
+    {
+      meta: { type: "rule", name: "cap-rule-scoped", inclusion: "fileMatch", fileMatchPattern: "*.ts", targets: "*" },
+      files: { "rule.md": `# Scoped Rule\nSee ${REFERENCE} for TS conventions.\n` },
     },
     // agent
     {
@@ -335,11 +340,13 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
           const cellName = `${target} · ${type}`;
 
           // Find the ingredient ref(s) for this type in the fixture
-          // We have cap-<type> for most, cap-skill-dir and cap-skill-file for skills
+          // We have cap-<type> for most, cap-skill-dir and cap-skill-file for skills, cap-rule and cap-rule-scoped for rules
           const fixtureRefs =
             type === "skill"
               ? ["skill/cap-skill-dir", "skill/cap-skill-file"]
-              : [`${type}/cap-${type}`];
+              : type === "rule"
+                ? ["rule/cap-rule", "rule/cap-rule-scoped"]
+                : [`${type}/cap-${type}`];
 
           // Collect all files for this cell:
           // - Files whose `ingredient` is one of the fixture refs AND `target` is this target
@@ -354,8 +361,8 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               cellFiles.push(f);
               continue;
             }
-            // Shared files: AGENTS.md belongs to type=rule
-            if (type === "rule" && f.ingredient === "rule/*" && f.path === "AGENTS.md") {
+            // Shared files: AGENTS.md belongs to type=rule (agents-md); copilot-instructions.md for copilot
+            if (type === "rule" && f.ingredient === "rule/*" && (f.path === "AGENTS.md" || f.path === ".github/copilot-instructions.md")) {
               cellFiles.push(f);
               continue;
             }

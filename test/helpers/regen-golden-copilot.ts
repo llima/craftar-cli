@@ -12,45 +12,51 @@ import { profile, recipe, scenario, type IngredientSpec } from "./forge.js";
 const GOLDEN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../golden/acme-copilot");
 
 const ingredients: IngredientSpec[] = [
-  // Test 1: always-on rule with description
+  // Tests 1 (always-on rules joined into .github/copilot-instructions.md)
   {
-    meta: { type: "rule", name: "style", description: "Style guide", inclusion: "always" },
+    meta: { type: "rule", name: "style", inclusion: "always" },
     files: { "rule.md": "Use tabs.\n" },
   },
-  // Test 2: scoped rule (fileMatch) with multiple patterns
+  {
+    meta: { type: "rule", name: "tone", inclusion: "always" },
+    files: { "rule.md": "Be brief.\n\n" },
+  },
+  // Test 2 (scoped rule with applyTo)
   {
     meta: { type: "rule", name: "api", inclusion: "fileMatch", fileMatchPattern: ["src/**/*.ts", "test/**"] },
     files: { "rule.md": "API.\n" },
   },
-  // Test 3: manual rule (no description)
+  // Test 3 (manual rule - skipped with warning)
   {
     meta: { type: "rule", name: "release", inclusion: "manual" },
     files: { "rule.md": "Release.\n" },
   },
-  // Test 4: agent with tools
+  // Test 4 (agent with tools mapped to aliases)
   {
-    meta: { type: "agent", name: "helper", description: "Helps", tools: ["Read", "Bash"] },
+    meta: { type: "agent", name: "helper", description: "Helps", model: "sonnet", tools: ["Read", "Grep", "Bash", "Unknown"] },
     files: { "agent.md": "Help.\n" },
   },
-  // Test 5: command with description
+  // Test 5 (command with description, argument-hint, agent: agent)
   {
-    meta: { type: "command", name: "review", description: "Review code" },
-    files: { "command.md": "Review.\n" },
+    meta: { type: "command", name: "review", description: "Review", argumentHint: "[file]" },
+    files: { "command.md": "Review it.\n" },
   },
-  // Test 5b: command without description
-  {
-    meta: { type: "command", name: "build" },
-    files: { "command.md": "Build.\n" },
-  },
-  // Test 6: MCP with env references
+  // Test 6 (MCP servers kept whole with ${NAME} -> ${env:NAME})
   {
     meta: {
       type: "mcp",
       name: "api",
-      server: { command: "npx", args: ["api", "--port", "8080"], env: { TOKEN: "${API_TOKEN}" } },
+      server: { command: "npx", args: ["${workspaceFolder}/api"], env: { TOKEN: "${API_TOKEN}" } },
     },
   },
-  // Test 7: skill (unsupported)
+  {
+    meta: {
+      type: "mcp",
+      name: "remote",
+      server: { type: "http", url: "https://example.com/mcp", headers: { "X-Key": "${KEY}" } },
+    },
+  },
+  // Test 7 (skill - unsupported)
   {
     meta: { type: "skill", name: "docs", layout: "dir" },
     files: { "SKILL.md": "Docs.\n" },
@@ -59,12 +65,13 @@ const ingredients: IngredientSpec[] = [
 
 const baseIngredients = [
   "rule/style",
+  "rule/tone",
   "rule/api",
   "rule/release",
   "agent/helper",
   "command/review",
-  "command/build",
   "mcp/api",
+  "mcp/remote",
   "skill/docs",
 ];
 

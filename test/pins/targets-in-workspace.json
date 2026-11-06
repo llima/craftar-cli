@@ -259,35 +259,36 @@
         "rule": {
           "state": "converted",
           "output": [
-            ".github/instructions/<name>.instructions.md"
+            ".github/instructions/<name>.instructions.md",
+            ".github/copilot-instructions.md"
           ],
-          "note": "written as .instructions.md in .github/instructions/; applyTo from fileMatchPattern (list or string), description from description field when present"
+          "note": "a scoped rule to .github/instructions/ with applyTo from fileMatchPattern; every always-on rule joined into .github/copilot-instructions.md; a manual or an auto rule has no Copilot equivalent and is skipped with a warning; VS Code also reads .claude/rules/, so with claude-code on it loads a scoped rule twice"
         },
         "agent": {
           "state": "converted",
           "output": [
-            ".github/agents/<name>.md"
+            ".github/agents/<name>.agent.md"
           ],
-          "note": "name and description kept; tools have no Copilot field and are dropped with a warning"
+          "note": "name, description and model kept; tools mapped to Copilot's aliases (read, edit, search, execute, web, agent, todo), a tool with no alias dropped with a warning"
         },
         "command": {
           "state": "converted",
           "output": [
             ".github/prompts/<name>.prompt.md"
           ],
-          "note": "written as .prompt.md in .github/prompts/; description as YAML frontmatter when present, body unchanged"
+          "note": "written as a VS Code prompt file with description, argument-hint and agent: agent"
         },
         "skill": {
           "state": "unsupported",
           "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "note": "through agent-skills: Copilot reads .agents/skills/, written by the agent-skills target"
         },
         "mcp": {
           "state": "converted",
           "output": [
             ".vscode/mcp.json"
           ],
-          "note": "the servers under servers; each has type: stdio and the server's command, args, env"
+          "note": "the servers under servers (VS Code's key), each kept whole; a ${NAME} reference becomes ${env:NAME}; the Copilot CLI reads the .mcp.json claude-code writes"
         },
         "script": {
           "state": "unsupported",
@@ -302,7 +303,7 @@
         "hook": {
           "state": "unsupported",
           "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "note": "not written yet: Copilot's hook events differ — planned for a later release"
         },
         "service": {
           "state": "unsupported",
