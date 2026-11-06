@@ -469,19 +469,19 @@ Sections layer the same way, weakest → strongest: the body's default → the p
 
 `craftar targets` prints this matrix from `src/core/capabilities.ts`; a test plans one ingredient of every type for each target and fails when a cell and its emitter disagree. **native** — written in the tool's own place for that type, as the Forge holds it (for `mcp`, judged on the server file); **converted** — written in another form (frontmatter or a banner added, references rewritten, another container format, or folded into a shared file); **unsupported** — not written: `sync` warns and names an ingredient aimed at that target.
 
-| type | `claude-code` | `kiro` | `agents-md` |
-|---|---|---|---|
-| `rule` | native | converted | converted |
-| `agent` | native | converted | unsupported |
-| `command` | native | converted | unsupported |
-| `skill` | native | converted | unsupported |
-| `mcp` | native | native | unsupported |
-| `script` | native | unsupported | unsupported |
-| `steering` | unsupported | native | unsupported |
-| `hook` | native | unsupported | unsupported |
-| `service` | unsupported | unsupported | unsupported |
+| type | `claude-code` | `kiro` | `agents-md` | `cursor` |
+|---|---|---|---|---|
+| `rule` | native | converted | converted | converted |
+| `agent` | native | converted | unsupported | converted |
+| `command` | native | converted | unsupported | unsupported |
+| `skill` | native | converted | unsupported | unsupported |
+| `mcp` | native | native | unsupported | converted |
+| `script` | native | unsupported | unsupported | unsupported |
+| `steering` | unsupported | native | unsupported | unsupported |
+| `hook` | native | unsupported | unsupported | unsupported |
+| `service` | unsupported | unsupported | unsupported | unsupported |
 
-**service** — unsupported in all three: a service is aimed at no AI coder (its `targets` defaults to `[]`, and an explicit one is skipped with the usual warning). `sync` writes it under `.craftar/` for no target — see *Local services*.
+**service** — unsupported in all four: a service is aimed at no AI coder (its `targets` defaults to `[]`, and an explicit one is skipped with the usual warning). `sync` writes it under `.craftar/` for no target — see *Local services*.
 
 **claude-code** — emits `.claude/rules|agents|commands|skills|scripts|hooks` and `.mcp.json` from the Forge (frontmatter kept byte-for-byte). Each MCP server is written exactly as the Forge holds it, undeclared keys included, in its own key order — in a schema 4 Forge with the params its ingredient declares rendered into its string values (*Server params*). When a written MCP ingredient declares `authEnv` or a written hook declares `registration`, sync also writes `.claude/settings.craftar.example.json` — `env` with each declared name and an empty value, `hooks` with each registration to copy — for the developer to copy into their own, untracked `.claude/settings.json`; a hand-maintained `.claude/settings.example.json` is never touched; `kiro` and `agents-md` write no counterpart. Existing files keep their line endings and BOM; new files are LF without a BOM. Steering is Kiro-only (its `targets` default to `[kiro]`); one aimed at `claude-code` explicitly (`targets: "*"` or a list naming it) is skipped with a warning.
 
@@ -774,7 +774,7 @@ From 1.0.0, craftar follows [semantic versioning](https://semver.org/). A change
 1. **Commands, flags and exit codes**, as *Commands* states them.
 2. **The tooling contracts**: every output this README calls a tooling contract — the `--json` shapes, and the names, arguments and results of the `craftar mcp` tools. Adding a key, a check `id`, a command or a flag is a minor.
 3. **Forges**: a Forge whose `craftar.forge.yaml` declares `schema:` 1 to 14 keeps loading. A new schema level is a minor: it is opt-in, and every older craftar refuses a Forge that declares it.
-4. **`craftar.lock` and the registry**: a lock at schema 1, 2 or 3 and the per-machine registry (`$CRAFTAR_HOME/registry.json`) stay readable.
+4. **`craftar.lock` and the registry**: a lock at schema 1, 2, 3 or 4 and the per-machine registry (`$CRAFTAR_HOME/registry.json`) stay readable.
 
 Not covered — these may change in a minor or a patch: human-readable output and its wording, warnings, the routes of `craftar ui` (its `--port`, the refusals before it starts serving and its exit codes are covered), and the text of `--help`. Each exit code keeps its meaning, but a new or changed warning or check can change what a run exits with under `--strict` for the same workspace.
 
@@ -799,6 +799,13 @@ Not covered — these may change in a minor or a patch: human-readable output an
 | `15` | native targets (cursor) | 1.1.0 |
 
 ## Upgrading
+
+### to 1.1.0
+
+- A new target, `cursor`: rules to `.cursor/rules/<name>.mdc`, agents to `.cursor/agents/<name>.md`, MCP servers to `.cursor/mcp.json`; commands and skills reach Cursor through the `agent-skills` target (a later commit), hooks not yet.
+- A Forge file that names a new target in `targets` (an ingredient, a profile, a section's `targets=`) needs `schema: 15`; a workspace may name it in `craftar.yaml` at any Forge schema.
+- `craftar.lock` is written at schema 4 when it names a new target; every craftar before 1.1.0 refuses that lock and a `craftar.yaml` naming a new target.
+- A workspace that names no new target sees no change: no byte, lock, warning or exit code.
 
 ### to 1.0.0
 
