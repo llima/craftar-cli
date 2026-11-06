@@ -1359,7 +1359,7 @@ program
       console.log(`  source      ${where}`);
     }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
-    // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
+    // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md and .github/copilot-instructions.md (rule/*) are not one ingredient.
     if (f.sections.length) {
       const layer = (l: SectionLayer) =>
         l === "profile" ? `profile ${p.resolution.profile.name}` : typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`;

@@ -209,7 +209,7 @@ export interface ExplainedFile {
 export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile | null {
   const f = p.files.find((x) => x.path === file);
   if (!f) return null;
-  // AGENTS.md (rule/*) and the MCP files (mcp/*) are not one ingredient: nothing resolved has their ref.
+  // AGENTS.md and Copilot's .github/copilot-instructions.md (rule/*) and the MCP files (mcp/*) are not one ingredient: nothing resolved has their ref.
   const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
   return {
     path: f.path,
