@@ -311,6 +311,61 @@
           "note": "skipped with a warning when aimed at this target"
         }
       }
+    },
+    {
+      "name": "agent-skills",
+      "inUse": false,
+      "capabilities": {
+        "rule": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "agent": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "command": {
+          "state": "converted",
+          "output": [
+            ".agents/skills/<name>/SKILL.md"
+          ],
+          "note": "written as a skill only a person invokes (disable-model-invocation: true), read by every tool that reads .agents/skills/; a command and a skill with one name fail the plan"
+        },
+        "skill": {
+          "state": "converted",
+          "output": [
+            ".agents/skills/<name>/<file>"
+          ],
+          "note": "copied into .agents/skills/<name>/; a single-file skill becomes <name>/SKILL.md"
+        },
+        "mcp": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "script": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "steering": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        }
+      }
     }
   ],
   "warnings": []

@@ -471,10 +471,16 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
             if (cap.state === "native") {
               expect(allAsHeld, `${cellName}: native should have all files as held`).toBe(true);
             } else {
-              expect(
-                allAsHeld,
-                `${cellName}: converted should have at least one file not as held`,
-              ).toBe(false);
+              // agent-skills · skill and agent-skills · command are "converted" due to re-housing (different output path),
+              // not content changes — the content may match the source exactly.
+              if (target === "agent-skills" && (type === "skill" || type === "command")) {
+                // Skip the content-change check; the "converted" state is due to re-housing
+              } else {
+                expect(
+                  allAsHeld,
+                  `${cellName}: converted should have at least one file not as held`,
+                ).toBe(false);
+              }
             }
           }
         });
@@ -581,11 +587,19 @@ const UNSUPPORTED: Array<[Target, string, string]> = [
   ...(["command", "skill", "script", "steering", "hook", "service"] as const).map(
     (ty) => ["cursor", ty, `cursor: 1 ${ty} ingredient(s) have no Cursor equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
+  // copilot supports rule, agent, command, mcp; the rest are unsupported (per-type warnings)
+  ...(["skill", "script", "steering", "hook", "service"] as const).map(
+    (ty) => ["copilot", ty, `copilot: 1 ${ty} ingredient(s) have no Copilot equivalent — skipped: ${ty}/x`] as [Target, string, string],
+  ),
+  // agent-skills supports command, skill; the rest are unsupported (per-type warnings)
+  ...(["rule", "agent", "mcp", "script", "steering", "hook", "service"] as const).map(
+    (ty) => ["agent-skills", ty, `agent-skills: 1 ${ty} ingredient(s) have no Agent Skills equivalent — skipped: ${ty}/x`] as [Target, string, string],
+  ),
 ];
 
 describe("written() — the walk decides and warns from the matrix (spec 18 §9.3)", () => {
-  it("the 19 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
-    expect(UNSUPPORTED).toHaveLength(19);
+  it("the 31 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
+    expect(UNSUPPORTED).toHaveLength(31);
     for (const [target, type, text] of UNSUPPORTED) {
       expect(record(await resolutionOf([spec(type, "x")]), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
       const other = target === "claude-code" ? ["kiro"] : ["claude-code"];

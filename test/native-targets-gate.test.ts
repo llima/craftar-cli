@@ -309,6 +309,43 @@ describe("native targets gate (spec 61 §7)", () => {
     await expect(readLock(dir)).rejects.toThrow("declares schema 5, which this craftar does not read — upgrade craftar");
   });
 
+  it("11. agent-skills in workspace targets at schema 15 → plans and writes lock schema 4", { timeout: atLeastWin32(60_000) }, async () => {
+    // Spec 61 §6, Ruling 3: agent-skills target writes to .agents/skills/
+    const ingredients: IngredientSpec[] = [
+      {
+        meta: { type: "skill", name: "analyze", targets: ["agent-skills"] },
+        files: { "SKILL.md": "# Analyze\nAnalyze the code.\n" },
+      },
+    ];
+    const recipes = [recipe("base", ["skill/analyze"])];
+    const profiles = [profile("acme", ["base"], ["claude-code", "agent-skills"])];
+
+    const s = kept(await scenario(
+      { ingredients, recipes, profiles },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(
+      path.join(s.forgeRoot, "craftar.forge.yaml"),
+      YAML.stringify({ name: "test-forge", schema: 15 }),
+    );
+
+    const ws = await loadWorkspace(s.wsRoot);
+    const p = await plan(ws);
+    expect(p.resolution.targets).toContain("agent-skills");
+
+    // Verify agent-skills produces files under .agents/skills/
+    expect(p.files.some((f) => f.target === "agent-skills" && f.path.startsWith(".agents/skills/"))).toBe(true);
+
+    const lock = await readLock(s.wsRoot);
+    const statuses = await status(ws, p, lock);
+    await apply(ws, p, statuses);
+
+    // Lock should be schema 4 (native target in use)
+    const lockAfter = await readLock(s.wsRoot);
+    expect(lockAfter!.schema).toBe(4);
+    expect(lockAfter!.targets).toContain("agent-skills");
+  });
+
   it("9. CRLF: synced workspace, .claude/rules/style.md rewritten with CRLF → status unchanged", { timeout: atLeastWin32(60_000) }, async () => {
     // Create a workspace with cursor target (lock schema 4)
     const ingredients: IngredientSpec[] = [

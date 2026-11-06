@@ -292,7 +292,7 @@ describe("targeted sections (spec 41 Part B §11.3)", () => {
   });
 
   it("Case 3: targets=true refuses invalid targets, value never in message", () => {
-    const problem = "section x: targets= takes one or more of claude-code, kiro, agents-md, cursor, copilot, comma-separated, each once";
+    const problem = "section x: targets= takes one or more of claude-code, kiro, agents-md, cursor, copilot, agent-skills, comma-separated, each once";
 
     // Empty value
     expect(markerLine(O("x", ""), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
@@ -443,7 +443,7 @@ describe("native target gate in section markers (spec 61 §7)", () => {
     // At schema 15, an invalid target should list all four targets including cursor
     const text = `# Body\n${OPEN_T("intro", "nope")}\nHello.\n${CLOSE}\n`;
     expect(() => parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: true }))
-      .toThrow("section intro: targets= takes one or more of claude-code, kiro, agents-md, cursor, copilot, comma-separated, each once");
+      .toThrow("section intro: targets= takes one or more of claude-code, kiro, agents-md, cursor, copilot, agent-skills, comma-separated, each once");
   });
 
   it("schema 15 with targets=cursor → accepted", () => {

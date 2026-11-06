@@ -225,6 +225,25 @@ export const CAPABILITIES = {
     hook: { state: "unsupported", output: [], note: "not written yet: Copilot's hook events differ — planned for a later release" },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
+  "agent-skills": {
+    rule: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    agent: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    command: {
+      state: "converted",
+      output: [".agents/skills/<name>/SKILL.md"],
+      note: "written as a skill only a person invokes (disable-model-invocation: true), read by every tool that reads .agents/skills/; a command and a skill with one name fail the plan",
+    },
+    skill: {
+      state: "converted",
+      output: [".agents/skills/<name>/<file>"],
+      note: "copied into .agents/skills/<name>/; a single-file skill becomes <name>/SKILL.md",
+    },
+    mcp: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -277,7 +296,8 @@ const writtenIs: [
   Equal<Written<"agents-md">, "rule">,
   Equal<Written<"cursor">, "rule" | "agent" | "mcp">,
   Equal<Written<"copilot">, "rule" | "agent" | "command" | "mcp">,
-] = [true, true, true, true, true];
+  Equal<Written<"agent-skills">, "command" | "skill">,
+] = [true, true, true, true, true, true];
 void writtenIs;
 
 /** How a target words the warning for a type it does not write. Not part of `targets --json`. */
@@ -287,6 +307,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type" }
   "agents-md": { label: "AGENTS.md", per: "type" },
   cursor: { label: "Cursor", per: "type" },
   copilot: { label: "Copilot", per: "type" },
+  "agent-skills": { label: "Agent Skills", per: "type" },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {

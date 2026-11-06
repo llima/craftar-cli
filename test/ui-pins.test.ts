@@ -13,7 +13,7 @@ import { atLeastWin32 } from "./helpers/timeouts.js";
  */
 
 const BROKEN = ["ws-badjson", "ws-badlock", "ws-badyaml", "ws-futurelock"] as const;
-const ENUM_WORKSPACE = "Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot'";
+const ENUM_WORKSPACE = "Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills'";
 const ENUM_LOCK = "Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md'";
 
 let root = "";
