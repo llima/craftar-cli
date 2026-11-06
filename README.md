@@ -806,7 +806,8 @@ Not covered — these may change in a minor or a patch: human-readable output an
 
 ### to 1.1.0
 
-- A new target, `cursor`: rules to `.cursor/rules/<name>.mdc`, agents to `.cursor/agents/<name>.md`, MCP servers to `.cursor/mcp.json`; commands and skills reach Cursor through the `agent-skills` target (a later commit), hooks not yet.
+- A new target, `cursor`: rules to `.cursor/rules/<name>.mdc`, agents to `.cursor/agents/<name>.md`, MCP servers to `.cursor/mcp.json`; commands and skills reach Cursor through the `agent-skills` target, hooks not yet.
+- A new target, `copilot`: scoped rules to `.github/instructions/<name>.instructions.md` (`applyTo`), every always-on rule joined into `.github/copilot-instructions.md`, agents to `.github/agents/<name>.agent.md` (tools mapped to Copilot's aliases), commands to `.github/prompts/<name>.prompt.md`, MCP servers to `.vscode/mcp.json` (`servers`); a manual or an auto rule has no Copilot equivalent and is skipped with a warning; skills reach Copilot through the `agent-skills` target, hooks not yet; with `claude-code` also on, VS Code loads a scoped rule twice (it reads `.claude/rules/` too).
 - A Forge file that names a new target in `targets` (an ingredient, a profile, a section's `targets=`) needs `schema: 15`; a workspace may name it in `craftar.yaml` at any Forge schema.
 - `craftar.lock` is written at schema 4 when it names a new target; every craftar before 1.1.0 refuses that lock and a `craftar.yaml` naming a new target.
 - A workspace that names no new target sees no change: no byte, lock, warning or exit code.
