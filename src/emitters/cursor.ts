@@ -1,7 +1,7 @@
 import { serializeFrontmatter } from "../core/frontmatter.js";
-import { ENV_NAME, type Ingredient } from "../schema/index.js";
+import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
-import { mcpServers, MCP_FILE, outName, textFile } from "./shared.js";
+import { envReferences, mcpServers, MCP_FILE, outName, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
 
 /**
@@ -21,6 +21,16 @@ export const cursor: Emitter<"cursor"> = {
         case "rule": {
           const path = `.cursor/rules/${outName(m)}.mdc`;
           const body = await ctx.text(ing, m.file, t);
+          // Warn if a fileMatchPattern item holds a comma, which Cursor reads as a separator.
+          if (m.inclusion === "fileMatch") {
+            const patterns = Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern : [m.fileMatchPattern ?? ""];
+            for (const pat of patterns) {
+              if (pat.includes(",")) {
+                ctx.warn(`cursor: rule ${ing.ref}: a glob holds a comma, which Cursor reads as a separator`);
+                break; // One warning per rule, not per pattern
+              }
+            }
+          }
           out.push(await textFile(ctx, path, ruleFrontmatter(m) + "\n" + body, t, ing.ref, { keepBom: false }));
           break;
         }
@@ -28,7 +38,7 @@ export const cursor: Emitter<"cursor"> = {
           const path = `.cursor/agents/${outName(m)}.md`;
           const body = await ctx.text(ing, m.file, t);
           if ((m.tools?.length ?? 0) > 0)
-            ctx.warn(`cursor: agent "${outName(m)}": tools have no Cursor field; dropped`);
+            ctx.warn(`cursor: agent "${outName(m)}": tools have no Cursor field and are dropped`);
           // Never the agent's frontmatterRaw: that is Claude Code's frontmatter.
           const doc = serializeFrontmatter({ name: outName(m), description: m.description, model: m.model }, body);
           out.push(await textFile(ctx, path, doc, t, ing.ref, { keepBom: false }));
@@ -62,18 +72,4 @@ function ruleFrontmatter(m: Extract<Ingredient, { type: "rule" }>): string {
   }
   lines.push(`alwaysApply: ${m.inclusion === "always"}`);
   return `---\n${lines.join("\n")}\n---\n`;
-}
-
-const ENV_REF = new RegExp(`\\$\\{(${ENV_NAME})\\}`, "g");
-
-/** A deep copy whose string leaves read `${env:NAME}` for each `${NAME}`; keys and every other value as they are. */
-function envReferences(v: unknown): unknown {
-  if (typeof v === "string") return v.replace(ENV_REF, "${env:$1}");
-  if (Array.isArray(v)) return v.map(envReferences);
-  if (v !== null && typeof v === "object") {
-    const o: Record<string, unknown> = Object.create(null);
-    for (const [k, x] of Object.entries(v)) o[k] = envReferences(x);
-    return o;
-  }
-  return v;
 }

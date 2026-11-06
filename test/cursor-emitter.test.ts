@@ -125,11 +125,11 @@ describe("cursor emitter (spec 61 §3.3, §5.2)", () => {
       '---\nname: helper\ndescription: Helps\nmodel: sonnet\n---\nHelp.\n'
     );
     // Check warning about dropped tools
-    expect(p.warnings).toContain('cursor: agent "helper": tools have no Cursor field; dropped');
+    expect(p.warnings).toContain('cursor: agent "helper": tools have no Cursor field and are dropped');
   });
 
-  // Test 5: MCP with env reference transformation
-  it("5. MCP: ${NAME} becomes ${env:NAME}, ingredient is mcp/*", async () => {
+  // Test 5: MCP with env reference transformation (including Cursor predefined variable)
+  it("5. MCP: ${NAME} becomes ${env:NAME}, but workspaceFolder stays as-is, ingredient is mcp/*", async () => {
     const s = kept(await scenario(
       {
         ingredients: [
@@ -137,7 +137,7 @@ describe("cursor emitter (spec 61 §3.3, §5.2)", () => {
             meta: {
               type: "mcp",
               name: "api",
-              server: { command: "npx", args: ["api"], env: { TOKEN: "${API_TOKEN}", MODE: "${MODE:-dev}" } },
+              server: { command: "npx", args: ["api", "${workspaceFolder}/x"], env: { TOKEN: "${API_TOKEN}", MODE: "${MODE:-dev}" } },
             },
           },
         ],
@@ -158,7 +158,7 @@ describe("cursor emitter (spec 61 §3.3, §5.2)", () => {
       mcpServers: {
         api: {
           command: "npx",
-          args: ["api"],
+          args: ["api", "${workspaceFolder}/x"],
           env: { TOKEN: "${env:API_TOKEN}", MODE: "${MODE:-dev}" },
         },
       },
@@ -197,6 +197,61 @@ describe("cursor emitter (spec 61 §3.3, §5.2)", () => {
     // One warning per type
     expect(p.warnings).toContain("cursor: 1 command ingredient(s) have no Cursor equivalent — skipped: command/review");
     expect(p.warnings).toContain("cursor: 1 skill ingredient(s) have no Cursor equivalent — skipped: skill/docs");
+  });
+
+  // Test 6a: fileMatchPattern with comma warns
+  it("6a. fileMatchPattern with comma in a pattern warns", async () => {
+    const s = kept(await scenario(
+      {
+        ingredients: [
+          {
+            meta: { type: "rule", name: "style", inclusion: "fileMatch", fileMatchPattern: ["*.{ts,tsx}", "src/**"] },
+            files: { "rule.md": "Style.\n" },
+          },
+        ],
+        recipes: [recipe("base", ["rule/style"])],
+        profiles: [profile("acme", ["base"], ["cursor"])],
+      },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    expect(p.warnings).toContain("cursor: rule rule/style: a glob holds a comma, which Cursor reads as a separator");
+  });
+
+  // Test 6b: Cursor's predefined variables are kept as-is
+  it("6b. Cursor predefined variables (workspaceFolder etc) are kept, not transformed to env:", async () => {
+    const s = kept(await scenario(
+      {
+        ingredients: [
+          {
+            meta: {
+              type: "mcp",
+              name: "local",
+              server: { command: "npx", args: ["${workspaceFolder}/x", "${userHome}/y"], env: { VAR: "${API_TOKEN}" } },
+            },
+          },
+        ],
+        recipes: [recipe("base", ["mcp/local"])],
+        profiles: [profile("acme", ["base"], ["cursor"])],
+      },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+
+    const ws = await loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    const p = await plan(ws);
+
+    const mcpFile = p.files.find((f) => f.path === ".cursor/mcp.json");
+    expect(mcpFile).toBeDefined();
+    const mcpContent = JSON.parse(mcpFile!.content.toString("utf8"));
+    // workspaceFolder and userHome should be kept as-is (predefined variables)
+    expect(mcpContent.mcpServers.local.args).toEqual(["${workspaceFolder}/x", "${userHome}/y"]);
+    // API_TOKEN should be transformed to ${env:API_TOKEN}
+    expect(mcpContent.mcpServers.local.env.VAR).toBe("${env:API_TOKEN}");
   });
 
   // Test 7: MCP with params and credential check at schema 15

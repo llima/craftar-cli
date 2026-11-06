@@ -44,12 +44,12 @@ async function acmeCursor(): Promise<Scenario> {
       meta: { type: "agent", name: "helper", description: "Helps", model: "sonnet", tools: ["Read", "Bash"] },
       files: { "agent.md": "Help.\n" },
     },
-    // Test 5: MCP with env references
+    // Test 5: MCP with env references (including Cursor predefined variable)
     {
       meta: {
         type: "mcp",
         name: "api",
-        server: { command: "npx", args: ["api"], env: { TOKEN: "${API_TOKEN}", MODE: "${MODE:-dev}" } },
+        server: { command: "npx", args: ["api", "${workspaceFolder}/x"], env: { TOKEN: "${API_TOKEN}", MODE: "${MODE:-dev}" } },
       },
     },
     // Test 6: command and skill (both aimed at cursor but unsupported)
@@ -116,6 +116,6 @@ describe("golden — acme-cursor (spec 61 §3.3)", () => {
     const { p } = await synced();
     expect(p.warnings).toContain("cursor: 1 command ingredient(s) have no Cursor equivalent — skipped: command/review");
     expect(p.warnings).toContain("cursor: 1 skill ingredient(s) have no Cursor equivalent — skipped: skill/docs");
-    expect(p.warnings).toContain('cursor: agent "helper": tools have no Cursor field; dropped');
+    expect(p.warnings).toContain('cursor: agent "helper": tools have no Cursor field and are dropped');
   });
 });

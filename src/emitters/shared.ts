@@ -4,6 +4,7 @@ import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor, listsOf } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
+import { ENV_NAME } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
 import { RULES_INDEX_LINE, RULES_INDEX_KEY, RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import { metaFor } from "../core/metadata-params.js";
@@ -1045,4 +1046,37 @@ export function flatSkills(
 export function flatSkillWarning(names: string[], prefix = "claude-code"): string {
   const paths = names.map((n) => `.claude/skills/${n}.md`).join(", ");
   return `${prefix}: Claude Code does not list a skill written as one file — ${paths}; set layout: dir in each ingredient.yaml`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Environment reference transformation (spec 61 §3.3)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cursor's predefined variables (spec 61 §3.3): these must NOT be transformed to `${env:…}`.
+ * See: https://docs.cursor.com/context/rules#predefined-variables
+ */
+const PREDEFINED = new Set(["workspaceFolder", "workspaceFolderBasename", "userHome", "pathSeparator"]);
+
+const ENV_REF = new RegExp(`\\$\\{(${ENV_NAME})\\}`, "g");
+
+/**
+ * A deep copy whose string values have `${NAME}` replaced with `${env:NAME}` — except for Cursor's
+ * predefined variables (`workspaceFolder`, `workspaceFolderBasename`, `userHome`, `pathSeparator`)
+ * which are kept as written. Keys and non-string values are copied unchanged.
+ */
+export function envReferences(v: unknown): unknown {
+  if (typeof v === "string") {
+    return v.replace(ENV_REF, (_match, name: string) => {
+      if (PREDEFINED.has(name)) return `\${${name}}`;
+      return `\${env:${name}}`;
+    });
+  }
+  if (Array.isArray(v)) return v.map(envReferences);
+  if (v !== null && typeof v === "object") {
+    const o: Record<string, unknown> = Object.create(null);
+    for (const [k, x] of Object.entries(v)) o[k] = envReferences(x);
+    return o;
+  }
+  return v;
 }

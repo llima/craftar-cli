@@ -3,7 +3,8 @@
     "api": {
       "command": "npx",
       "args": [
-        "api"
+        "api",
+        "${workspaceFolder}/x"
       ],
       "env": {
         "TOKEN": "${env:API_TOKEN}",
