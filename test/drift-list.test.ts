@@ -56,4 +56,23 @@ describe("driftList", () => {
     expect(driftList((["unchanged", "update", "new", "adopt", "collision", "orphan"] as const).map(other))).toEqual([]);
     expect(driftList([drift("z.md", "claude-code", "rule/z", "x\n", "x\n"), other("update"), drift("a.md", "claude-code", "rule/a", "x\n", "x\n")]).map((r) => r.path)).toEqual(["z.md", "a.md"]);
   });
+
+  it("a new target's file is not promotable: cursor file, copilot file, several rules", () => {
+    // A hand-edited .cursor/rules/x.mdc -> promotable: false, reason: "cursor file"
+    // A hand-edited .github/agents/x.agent.md -> promotable: false, reason: "copilot file"
+    // A hand-edited .github/copilot-instructions.md (rule/*) -> reason: "several rules"
+    // .cursor/mcp.json (mcp/*) -> reason: ".mcp.json" (the mcp check comes first)
+    const rows = driftList([
+      drift(".cursor/rules/x.mdc", "cursor", "rule/x", "old\n", "new\n"),
+      drift(".github/agents/x.agent.md", "copilot", "agent/x", "old\n", "new\n"),
+      drift(".github/copilot-instructions.md", "copilot", "rule/*", "old\n", "new\n"),
+      drift(".cursor/mcp.json", "cursor", "mcp/*", "old\n", "new\n"),
+    ]);
+    expect(rows.map((r) => [r.path, r.promotable, r.reason])).toEqual([
+      [".cursor/rules/x.mdc", false, "cursor file"],
+      [".github/agents/x.agent.md", false, "copilot file"],
+      [".github/copilot-instructions.md", false, "several rules"],
+      [".cursor/mcp.json", false, ".mcp.json"],
+    ]);
+  });
 });

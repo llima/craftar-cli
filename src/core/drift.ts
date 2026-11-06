@@ -3,7 +3,7 @@ import path from "node:path";
 import { escapeReason } from "./contain.js";
 import { slotLabel } from "./integrations.js";
 import { templatedMetadataEdit } from "./metadata-params.js";
-import type { Owner } from "../schema/index.js";
+import { isLegacyOwner, type Owner } from "../schema/index.js";
 import type { FileStatus, Plan } from "./sync.js";
 import { hashNormalized } from "./text.js";
 
@@ -46,7 +46,7 @@ export const parentLocalReason = (parent: string): string => `local to ${parent}
  * The static half of promote's refusals: it reads the status, never the Forge's git state.
  * The order is: a path that escapes (spec 48), orphan, then service file (spec 31), then provided (spec 33i), then a
  * parent's local (spec 54), then reworded (spec 41), then indexed (spec 44), then a templated metadata field (spec 50),
- * then kiro, then AGENTS.md, then .mcp.json.
+ * then kiro, then AGENTS.md, then .mcp.json, then a new target's file (non-legacy owner, spec 61).
  */
 
 function staticReason(s: FileStatus, provided: Map<string, { slot: string; recipe: string }>, reworded: ReadonlySet<string>, indexed: ReadonlySet<string>, metadata: ReadonlySet<string>, parentLocals: ReadonlyMap<string, string>, listCiting: ReadonlySet<string>): string | null {
@@ -65,6 +65,11 @@ function staticReason(s: FileStatus, provided: Map<string, { slot: string; recip
   if (s.target === "kiro") return "kiro file";
   if (s.target === "agents-md") return "AGENTS.md";
   if (mcpTagged(s)) return ".mcp.json";
+  // A file whose target is not a legacy owner (spec 61): either a rule/* aggregate or a single file.
+  if (s.target && !isLegacyOwner(s.target)) {
+    if (s.ingredient === "rule/*") return "several rules";
+    return `${s.target} file`;
+  }
   return null;
 }
 

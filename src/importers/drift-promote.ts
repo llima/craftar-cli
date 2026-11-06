@@ -189,6 +189,8 @@ const D4_OTHER = (p: string, state: string) => `${p} is not drifted (${state}) �
 const D4_ORPHAN = (p: string) => `${p} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${p}\` removes it`;
 const D5_KIRO = (p: string, hint: string) => `${p} is a kiro file — promote reads only what the claude-code target wrote${hint}`;
 const D5_AGENTSMD = (p: string) => `${p} holds several rules in one file — promote reads only what the claude-code target wrote`;
+/** D5 for new targets (spec 61): a file of a non-legacy target. */
+const D5_TARGET = (p: string, target: string, hint: string) => `${p} is a ${target} file — promote reads only what the claude-code target wrote${hint}`;
 const D5_SERVICE = (p: string) => `${p} is a service file — promote reads only what the claude-code target wrote; change the service ingredient in the Forge`;
 const D6 = (p: string) => `${p} holds every mcp ingredient in one file — edit the mcp ingredient in the Forge`;
 const D7 = (ing: string, p: string, state: string, profile: string) =>
@@ -324,7 +326,8 @@ async function provePromote(opts: {
   // Also add AGENTS.md if this is a rule that's embedded in it (has a marker line)
   let agentsMdIsDependent = false;
   if (meta.type === "rule") {
-    const agentsMd = p0.files.find((f) => f.ingredient === ("rule/*" as IngredientRef) || f.path === "AGENTS.md");
+    // Find AGENTS.md by its path, not by its ingredient (rule/* is also Copilot's aggregate, .github/copilot-instructions.md)
+    const agentsMd = p0.files.find((f) => f.path === "AGENTS.md");
     if (agentsMd) {
       const p0AgentsContent = agentsMd.content.toString("utf8");
       const markerLine = ruleMarker(N);
@@ -685,6 +688,15 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(D5_AGENTSMD(normalized));
     } else if (reason === ".mcp.json") {
       throw new Error(D6(normalized));
+    } else if (reason === "several rules") {
+      throw new Error(D5_AGENTSMD(normalized));
+    } else if (reason?.endsWith(" file")) {
+      // A new target's file (e.g. "cursor file", "copilot file")
+      const target = reason.slice(0, -5); // strip " file"
+      const ingredientRef = fileStatus.ingredient;
+      const claudePath = ingredientRef ? p0.files.find((f) => f.ingredient === ingredientRef && f.target === "claude-code")?.path : null;
+      const hint = claudePath ? `; edit and promote \`${claudePath}\` instead` : "";
+      throw new Error(D5_TARGET(normalized, target, hint));
     } else {
       // Fallback for any other reason (shouldn't happen for drift state)
       throw new Error(D4_OTHER(normalized, fileStatus.state));

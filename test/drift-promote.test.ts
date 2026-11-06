@@ -718,9 +718,113 @@ describe("cli — drift promote", () => {
     expect(porcelain(s.forgeRoot)).toBe("");
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
-});
 
-// Step 30f: recipe placement, existing variant, three targets
+  it("23. D5 (cursor file with hint) — a cursor rule is not promotable, with hint when claude-code writes it", async () => {
+    // Profile targets claude-code and cursor, drift on .cursor/rules/x.mdc
+    const s = await scenario(
+      {
+        ingredients: [rule("x", "X one\nX two\n")],
+        recipes: [recipe("base", ["rule/x"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "cursor"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit the cursor rule file
+    await fs.appendFile(path.join(s.wsRoot, ".cursor/rules/x.mdc"), "hand edit\n");
+
+    const r = runCli(["drift", "promote", ".cursor/rules/x.mdc", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .cursor/rules/x.mdc is a cursor file — promote reads only what the claude-code target wrote; edit and promote `.claude/rules/x.md` instead\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("24. D5 (copilot file) — a copilot agent is not promotable, with hint when claude-code writes it", async () => {
+    // Profile targets claude-code and copilot, drift on .github/agents/x.agent.md
+    const s = await scenario(
+      {
+        ingredients: [
+          { meta: { type: "agent", name: "x", description: "Agent X" }, files: { "agent.md": "X agent\n" } },
+        ],
+        recipes: [recipe("base", ["agent/x"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "copilot"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit the copilot agent file
+    await fs.appendFile(path.join(s.wsRoot, ".github/agents/x.agent.md"), "hand edit\n");
+
+    const r = runCli(["drift", "promote", ".github/agents/x.agent.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .github/agents/x.agent.md is a copilot file — promote reads only what the claude-code target wrote; edit and promote `.claude/agents/x.md` instead\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("25. D5 (several rules) — copilot-instructions.md with rule/* is not promotable", async () => {
+    // Profile targets copilot, two always-on rules aggregate into .github/copilot-instructions.md
+    const s = await scenario(
+      {
+        ingredients: [rule("a", "A\n"), rule("b", "B\n")],
+        recipes: [recipe("base", ["rule/a", "rule/b"])],
+        profiles: [profile("acme", ["base"], ["copilot"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit the copilot-instructions.md
+    await fs.appendFile(path.join(s.wsRoot, ".github/copilot-instructions.md"), "hand edit\n");
+
+    const r = runCli(["drift", "promote", ".github/copilot-instructions.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .github/copilot-instructions.md holds several rules in one file — promote reads only what the claude-code target wrote\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
+  it("26. cursor MCP file still gets the .mcp.json reason (mcp/* check before target check)", async () => {
+    // Profile targets cursor only, drift on .cursor/mcp.json - the mcp/* check should fire first
+    const s = await scenario(
+      {
+        ingredients: [{ meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } }],
+        recipes: [recipe("base", ["mcp/srv"])],
+        profiles: [profile("acme", ["base"], ["cursor"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    // Hand-edit .cursor/mcp.json
+    const mcpPath = path.join(s.wsRoot, ".cursor/mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.srv.args = ["srv-edited"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2));
+
+    const r = runCli(["drift", "promote", ".cursor/mcp.json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    // The mcp/* check fires first, so the error is about the MCP file, not about cursor file
+    expect(r.stderr).toBe("error: .cursor/mcp.json holds every mcp ingredient in one file — edit the mcp ingredient in the Forge\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+});
 
 /** Two profiles sharing `base`. */
 async function M() {
