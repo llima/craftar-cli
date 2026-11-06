@@ -61,7 +61,7 @@ describe("the profile list gains `0) a new profile` (§4.3)", () => {
       "New profile's name: ",
       "Start from an existing profile [none]: ",
       "Adjust the recipes [no]: ",
-      "Targets — claude-code, kiro, agents-md, separated by commas [claude-code, kiro, from acme]: ",
+      "Targets — claude-code, kiro, agents-md, cursor, separated by commas [claude-code, kiro, from acme]: ",
     ]);
     expect(sc.said).toContain("Recipes of initech (from acme): base → stack-node");
     if (r.kind !== "answered") throw new Error("expected answers");
@@ -109,7 +109,7 @@ describe("the new-profile questions (§4.3)", () => {
     const r = await ask(s, { forge: s.forge }, sc.io);
     expect(sc.asked).toContain("Add [none]: ");
     expect(sc.asked).not.toContain("Adjust the recipes [no]: ");
-    expect(sc.asked.at(-1)).toBe("Targets — claude-code, kiro, agents-md, separated by commas [claude-code, default]: ");
+    expect(sc.asked.at(-1)).toBe("Targets — claude-code, kiro, agents-md, cursor, separated by commas [claude-code, default]: ");
     if (r.kind !== "answered") throw new Error("expected answers");
     expect(r.input.newProfile).toEqual({ name: "initech" });
     expect(r.input.addRecipes).toEqual(["extra"]);

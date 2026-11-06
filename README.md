@@ -2,7 +2,7 @@
 
 Craft, sync and convert AI-coding workspace harnesses — rules, agents, commands, skills, MCP servers — across every client workspace you maintain and every AI coder each team uses.
 
-> Status: **1.0.0** — phases 0, 1 and 2 done: the foundations, the client profile and the environment. `import`, `sync`, `status`, `diff`, `explain` and `ls` work end to end for the `claude-code` and `kiro` targets and are validated byte for byte against a real workspace (see *Oracle*); `agents-md` is emitted too (see *Targets*). A Forge declares the `schema:` it needs, from 1 to 14, each level opt-in and refused by an older craftar. Every command is in *Commands*, what each release changed is in *Upgrading*, and what 1.0.0 promises to keep stable is in *Compatibility*.
+> Status: **1.0.0** — phases 0, 1 and 2 done: the foundations, the client profile and the environment. `import`, `sync`, `status`, `diff`, `explain` and `ls` work end to end for the `claude-code` and `kiro` targets and are validated byte for byte against a real workspace (see *Oracle*); `agents-md` is emitted too (see *Targets*). A Forge declares the `schema:` it needs, from 1 to 15, each level opt-in and refused by an older craftar. Every command is in *Commands*, what each release changed is in *Upgrading*, and what 1.0.0 promises to keep stable is in *Compatibility*.
 
 ## The idea in one paragraph
 
@@ -152,7 +152,7 @@ An ingredient's `as` and a script's or hook's `files` entries become part of the
 
 ```yaml
 name: forge
-schema: 2          # 1 (the default), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 or 14; 2 is required for section markers, 3 for integrations, 4 for params in an MCP server, 5 for agents-md.primary, 6 for target-scoped sections, 7 for the rules index, 8 for profile-local ingredients and recipes, 9 for params in metadata, 10 for sections in a recipe, 11 for section values held in files, 12 for a local that overrides a root base, 13 for a profile that extends a profile, 14 for list params — each includes the ones below it
+schema: 2          # 1 (the default), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 or 15; 2 is required for section markers, 3 for integrations, 4 for params in an MCP server, 5 for agents-md.primary, 6 for target-scoped sections, 7 for the rules index, 8 for profile-local ingredients and recipes, 9 for params in metadata, 10 for sections in a recipe, 11 for section values held in files, 12 for a local that overrides a root base, 13 for a profile that extends a profile, 14 for list params, 15 for native targets (cursor) — each includes the ones below it
 description: Craftar Forge — shared harness ingredients, recipes and client profiles.
 ```
 
@@ -796,6 +796,7 @@ Not covered — these may change in a minor or a patch: human-readable output an
 | `12` | a profile local overriding a root base | 0.55.0 |
 | `13` | profiles that extend an abstract profile | 0.57.0 |
 | `14` | list params | 0.59.0 |
+| `15` | native targets (cursor) | 1.1.0 |
 
 ## Upgrading
 

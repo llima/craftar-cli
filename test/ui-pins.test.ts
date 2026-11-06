@@ -13,7 +13,8 @@ import { atLeastWin32 } from "./helpers/timeouts.js";
  */
 
 const BROKEN = ["ws-badjson", "ws-badlock", "ws-badyaml", "ws-futurelock"] as const;
-const ENUM = "Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md'";
+const ENUM_WORKSPACE = "Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor'";
+const ENUM_LOCK = "Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md'";
 
 let root = "";
 let real = "";
@@ -31,8 +32,8 @@ const norm = (x: string): string =>
 
 const WARNINGS = [
   "<ROOT>/ws-badjson: craftar.lock is not valid JSON",
-  `<ROOT>/ws-badlock: craftar.lock is not a valid lock: files.0.target: ${ENUM}`,
-  `<ROOT>/ws-badyaml: invalid craftar.yaml: targets.0: ${ENUM}`,
+  `<ROOT>/ws-badlock: craftar.lock is not a valid lock: files.0.target: ${ENUM_LOCK}`,
+  `<ROOT>/ws-badyaml: invalid craftar.yaml: targets.0: ${ENUM_WORKSPACE}`,
   "<ROOT>/ws-futurelock: craftar.lock declares schema (not a whole number), which this craftar does not read — upgrade craftar",
 ];
 
@@ -108,8 +109,8 @@ describe("pins: craftar workspaces and doctor on workspaces that do not load (sp
   it("4. craftar doctor on each broken workspace: the failing check's line, exit 1, no sentinel (control)", () => {
     const expected: Record<(typeof BROKEN)[number], string> = {
       "ws-badjson": "  error  lock          craftar.lock is not valid JSON — repair or remove craftar.lock",
-      "ws-badlock": `  error  lock          craftar.lock is not a valid lock (files.0.target: ${ENUM}) — repair or remove craftar.lock`,
-      "ws-badyaml": `  error  config        invalid craftar.yaml (targets.0: ${ENUM})`,
+      "ws-badlock": `  error  lock          craftar.lock is not a valid lock (files.0.target: ${ENUM_LOCK}) — repair or remove craftar.lock`,
+      "ws-badyaml": `  error  config        invalid craftar.yaml (targets.0: ${ENUM_WORKSPACE})`,
       "ws-futurelock": "  error  lock          craftar.lock declares schema (not a whole number), which this craftar does not read — upgrade craftar",
     };
     for (const name of BROKEN) {

@@ -166,11 +166,11 @@ describe("targetsReport", () => {
     const s = kept(await mcpWorkspace());
     const bare = await targetsReport(s.wsRoot, HOME, null);
     expect(Object.keys(bare)).toEqual(["ingredientTypes", "targets", "warnings"]);
-    expect([bare.targets.map((t) => t.inUse), bare.warnings]).toEqual([[null, null, null], []]);
+    expect([bare.targets.map((t) => t.inUse), bare.warnings]).toEqual([[null, null, null, null], []]);
     const marked = await targetsReport(s.wsRoot, HOME, { merged: await readWorkspaceConfig(s.wsRoot) });
-    expect([marked.targets.map((t) => [t.name, t.inUse]), marked.warnings]).toEqual([[["claude-code", true], ["kiro", true], ["agents-md", false]], []]);
+    expect([marked.targets.map((t) => [t.name, t.inUse]), marked.warnings]).toEqual([[["claude-code", true], ["kiro", true], ["agents-md", false], ["cursor", false]], []]);
     const why = await targetsReport(s.wsRoot, HOME, { reason: "because" });
-    expect([why.targets.map((t) => t.inUse), why.warnings]).toEqual([[null, null, null], ["targets in use not shown: because"]]);
+    expect([why.targets.map((t) => t.inUse), why.warnings]).toEqual([[null, null, null, null], ["targets in use not shown: because"]]);
     const merged = await readWorkspaceConfig(s.wsRoot);
     await fs.rm(s.forgeRoot, { recursive: true });
     expect((await targetsReport(s.wsRoot, HOME, { merged })).warnings).toEqual([`targets in use not shown: Forge not found at ${s.forgeRoot}`]);

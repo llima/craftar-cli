@@ -292,13 +292,13 @@ describe("targeted sections (spec 41 Part B §11.3)", () => {
   });
 
   it("Case 3: targets=true refuses invalid targets, value never in message", () => {
-    const problem = "section x: targets= takes one or more of claude-code, kiro, agents-md, comma-separated, each once";
+    const problem = "section x: targets= takes one or more of claude-code, kiro, agents-md, cursor, comma-separated, each once";
 
     // Empty value
     expect(markerLine(O("x", ""), { targets: true })).toEqual({ kind: "near", problem });
 
     // Unknown target
-    expect(markerLine(O("x", "cursor"), { targets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "vscode"), { targets: true })).toEqual({ kind: "near", problem });
 
     // Duplicate target
     expect(markerLine(O("x", "kiro,kiro"), { targets: true })).toEqual({ kind: "near", problem });

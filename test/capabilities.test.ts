@@ -23,8 +23,8 @@ import type { EmitBase, Emitter, PlannedFile } from "../src/emitters/types.js";
  * `targets: "*"` and a unique output name, and every body referencing `.claude/rules/cite-me.md`.
  */
 async function makeCapabilityForge(root: string): Promise<void> {
-  // Create the forge manifest
-  await writeFiles(root, { "craftar.forge.yaml": YAML.stringify({ name: "capability-forge", schema: 1 }) });
+  // Create the forge manifest - use schema 15 to allow cursor target
+  await writeFiles(root, { "craftar.forge.yaml": YAML.stringify({ name: "capability-forge", schema: 15 }) });
 
   const REFERENCE = ".claude/rules/cite-me.md";
 

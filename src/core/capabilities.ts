@@ -167,6 +167,53 @@ export const CAPABILITIES = {
       note: "skipped with a warning when aimed at this target",
     },
   },
+  cursor: {
+    rule: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    agent: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    command: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    skill: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    mcp: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    script: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    steering: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    hook: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+    service: {
+      state: "unsupported",
+      output: [],
+      note: "skipped with a warning when aimed at this target",
+    },
+  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -217,7 +264,8 @@ const writtenIs: [
   Equal<Written<"claude-code">, "rule" | "agent" | "command" | "skill" | "mcp" | "script" | "hook">,
   Equal<Written<"kiro">, "rule" | "agent" | "command" | "skill" | "mcp" | "steering">,
   Equal<Written<"agents-md">, "rule">,
-] = [true, true, true];
+  Equal<Written<"cursor">, never>,
+] = [true, true, true, true];
 void writtenIs;
 
 /** How a target words the warning for a type it does not write. Not part of `targets --json`. */
@@ -225,6 +273,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type" }
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
+  cursor: { label: "Cursor", per: "type" },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {

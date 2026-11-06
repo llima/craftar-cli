@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
+import { readsNativeTargets, nativeTargetNearMiss, firstNewTarget } from "./native-targets.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor, listsOf } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
@@ -15,11 +16,12 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
 import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockV2, type LockV3, type LockV4, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, FORGE_SCHEMA_NATIVE_TARGETS, isLegacyTarget } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
+import { cursor } from "../emitters/cursor.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
@@ -39,7 +41,7 @@ export { AGENTS_MD_BUDGET_KEY };
 export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
 
 // Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
-const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd };
+const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor };
 
 /**
  * Runs one target's emitter on the walk of what the matrix says it writes. The walk warns about the
@@ -599,6 +601,22 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
+        // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target in a section's targets= is a near miss.
+        if (!readsNativeTargets(forge.manifest.schema)) {
+          for (const s of p.sections) {
+            if (s.targets) {
+              for (const t of s.targets) {
+                if (!isLegacyTarget(t)) {
+                  const hint = nativeTargetNearMiss(t);
+                  const msg = hint
+                    ? `${forgeRel(forge, abs)}: section ${s.name} targets=: ${hint} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in ${FORGE_MANIFEST}`
+                    : `${forgeRel(forge, abs)}: section ${s.name} targets=: ${t} is not a valid target`;
+                  throw new Error(msg);
+                }
+              }
+            }
+          }
+        }
         // Edge case: a service file with a targeted section fails the plan
         if (ing.meta.type === "service") {
           for (const s of p.sections) {
@@ -1345,7 +1363,7 @@ export interface FileStatus {
   target?: Owner;
   ingredient?: string;
   planned?: PlannedFile;
-  lock?: LockEntry | LockEntryV3;
+  lock?: LockEntry | LockEntryV3 | LockEntryV4;
   /** Set only on a row whose path escapes the workspace (spec 48 §4.3); `statusReport` drops it, so it reaches no `--json`. */
   escapes?: Escape;
   /** `hashNormalized` of the bytes `status()` read at this path; null when nothing was read (absent, not a regular file, or a path that escapes). */
@@ -1355,7 +1373,7 @@ export interface FileStatus {
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
-function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3): boolean {
+function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3 | LockEntryV4): boolean {
   return hashNormalized(disk) === entry.hash || (!isUtf8(disk) && legacyHash(disk) === entry.hash);
 }
 
@@ -1451,7 +1469,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];
-  const entries: LockEntryV3[] = [];
+  const entries: LockEntryV4[] = [];
 
   // Compute once, used per row for escape checks with a fresh cache each time.
   const root = await containRoot(ws.root);
@@ -1551,10 +1569,14 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     }
   }
 
-  // Schema 3 when any entry has target `services`; otherwise schema 2 (spec 31 §5.2, spec 13 §5.2).
+  // Lock schema selection (spec 31 §5.2, spec 61 §7):
+  // - Schema 4 when targets include a native target (cursor) — even if no file is emitted for it.
+  // - Schema 3 when any entry has target `services` (and no native target in targets).
+  // - Schema 2 otherwise.
   const sortedEntries = entries.sort((a, b) => a.path.localeCompare(b.path));
   const hasServices = entries.some((e) => e.target === "services");
-  // Build the shared part once; the two branches differ only in `schema` and in the entry type.
+  const nativeTarget = firstNewTarget(p.resolution.targets);
+  // Build the shared part once; the branches differ only in `schema` and in the entry type.
   const base = {
     forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
     profile: ws.config.profile,
@@ -1562,11 +1584,15 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     targets: p.resolution.targets,
     generatedAt: new Date().toISOString(),
   };
-  const built: LockV2 | LockV3 = hasServices
-    ? { schema: 3, ...base, files: sortedEntries }
-    // The narrowing cast is sound: hasServices is false, so no entry has target "services",
-    // thus every entry's target is a Target (claude-code | kiro | agents-md).
-    : { schema: 2, ...base, files: sortedEntries as LockEntry[] };
+  const built: LockV2 | LockV3 | LockV4 = nativeTarget !== null
+    ? { schema: 4, ...base, files: sortedEntries }
+    : hasServices
+    // The narrowing casts are sound: nativeTarget is null, so targets has no native target (cursor) and no entry has one;
+    // every entry's target is a legacy owner (claude-code | kiro | agents-md | services).
+    ? { schema: 3, ...base, targets: base.targets as LegacyTarget[], files: sortedEntries as LockEntryV3[] }
+    // The narrowing casts are sound: hasServices is false and no native target, so targets has no native target and no entry has
+    // target "services" or a native target; every target and entry target is a LegacyTarget (claude-code | kiro | agents-md).
+    : { schema: 2, ...base, targets: base.targets as LegacyTarget[], files: sortedEntries as LockEntry[] };
   // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
   // lock always differs, so the first sync with this craftar upgrades it.
   const onDisk = opts.dryRun ? null : await readLock(ws.root);
@@ -1576,7 +1602,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   return { written, removed, skipped, lock };
 }
 
-function entry(f: PlannedFile): LockEntryV3 {
+function entry(f: PlannedFile): LockEntryV4 {
   return { path: f.path, hash: hashNormalized(f.content), target: f.target, ingredient: f.ingredient };
 }
 

@@ -317,7 +317,7 @@ async function buildScenarioRecord(s: Scenario, includeExplainPrimary = false): 
     syncCheck: { code: syncCheckResult.code, stdout: syncCheckResult.stdout, stderr: syncCheckResult.stderr },
     status: { code: statusResult.code, stdout: statusResult.stdout, stderr: statusResult.stderr },
     diff: { code: diffResult.code, stdout: diffResult.stdout, stderr: diffResult.stderr },
-    targets: { code: targetsResult.code, stdout: targetsResult.stdout, stderr: targetsResult.stderr },
+    targets: { code: targetsResult.code, stdout: filterTargetsOutput(targetsResult.stdout), stderr: targetsResult.stderr },
     doctorWorkspace,
     doctorExit: doctorResult.code,
     explain: { code: explainResult.code, stdout: explainResult.stdout, stderr: explainResult.stderr },
@@ -339,6 +339,23 @@ function withoutTimestamps(record: ScenarioRecord): ScenarioRecord {
     message: c.message.replace(/schema \d+, generated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "schema N, generated <timestamp>"),
   }));
   return { ...record, doctorWorkspace };
+}
+
+/**
+ * Spec 61 §7: filter the `targets --json` output to only include legacy targets (claude-code, kiro, agents-md),
+ * so the pin comparison does not fail due to the addition of cursor.
+ */
+function filterTargetsOutput(output: string): string {
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed.targets && Array.isArray(parsed.targets)) {
+      const legacyTargets = ["claude-code", "kiro", "agents-md"];
+      parsed.targets = parsed.targets.filter((t: { name: string }) => legacyTargets.includes(t.name));
+    }
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return output;
+  }
 }
 
 interface PinFile {
