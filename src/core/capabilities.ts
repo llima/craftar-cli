@@ -176,7 +176,7 @@ export const CAPABILITIES = {
     agent: {
       state: "converted",
       output: [".cursor/agents/<name>.md"],
-      note: "name, description and model kept; tools and allowedTools have no Cursor field and are dropped with a warning",
+      note: "name, description and model kept; tools have no Cursor field and are dropped with a warning",
     },
     command: {
       state: "unsupported",

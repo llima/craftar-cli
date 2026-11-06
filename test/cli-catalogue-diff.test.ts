@@ -390,7 +390,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "cursor · rule .cursor/rules/<name>.mdc — written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; the body unchanged",
       "claude-code · agent .claude/agents/<name>.md",
       "kiro · agent .kiro/agents/<name>.json — written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
-      "cursor · agent .cursor/agents/<name>.md — name, description and model kept; tools and allowedTools have no Cursor field and are dropped with a warning",
+      "cursor · agent .cursor/agents/<name>.md — name, description and model kept; tools have no Cursor field and are dropped with a warning",
       "claude-code · command .claude/commands/<name>.md",
       "kiro · command .kiro/steering/commands/<name>.md — written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
       "claude-code · skill .claude/skills/<name>/<file>, .claude/skills/<name>.md",
