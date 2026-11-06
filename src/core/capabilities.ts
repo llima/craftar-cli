@@ -167,6 +167,83 @@ export const CAPABILITIES = {
       note: "skipped with a warning when aimed at this target",
     },
   },
+  cursor: {
+    rule: {
+      state: "converted",
+      output: [".cursor/rules/<name>.mdc"],
+      note: "written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; a .claude/rules/ reference in the body names the file a target writes for that rule; with agents-md among the targets, an always-on rule with the default targets is left to AGENTS.md",
+    },
+    agent: {
+      state: "converted",
+      output: [".cursor/agents/<name>.md"],
+      note: "name, description and model kept; tools have no Cursor field and are dropped with a warning",
+    },
+    command: {
+      state: "unsupported",
+      output: [],
+      note: "through agent-skills: Cursor moved commands to skills, written to .agents/skills/ by the agent-skills target",
+    },
+    skill: {
+      state: "unsupported",
+      output: [],
+      note: "through agent-skills: Cursor reads .agents/skills/, written by the agent-skills target",
+    },
+    mcp: {
+      state: "converted",
+      output: [".cursor/mcp.json"],
+      note: "the servers under mcpServers; a ${NAME} reference becomes ${env:NAME}",
+    },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "not written yet: Cursor's hook events differ — planned for a later release" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
+  copilot: {
+    rule: {
+      state: "converted",
+      output: [".github/instructions/<name>.instructions.md", ".github/copilot-instructions.md"],
+      note: "a scoped rule to .github/instructions/ with applyTo from fileMatchPattern; every always-on rule joined into .github/copilot-instructions.md, but with agents-md among the targets an always-on rule with the default targets is left to AGENTS.md; a manual or an auto rule has no Copilot equivalent and is skipped with a warning; VS Code also reads .claude/rules/, so with claude-code on it loads a scoped rule twice",
+    },
+    agent: {
+      state: "converted",
+      output: [".github/agents/<name>.agent.md"],
+      note: "name, description and model kept; tools mapped to Copilot's aliases (read, edit, search, execute, web, agent, todo), a tool with no alias dropped with a warning",
+    },
+    command: {
+      state: "converted",
+      output: [".github/prompts/<name>.prompt.md"],
+      note: "written as a VS Code prompt file with description, argument-hint and agent: agent; with agent-skills among the targets, a command with the default targets is left to .agents/skills/",
+    },
+    skill: { state: "unsupported", output: [], note: "through agent-skills: Copilot reads .agents/skills/, written by the agent-skills target" },
+    mcp: {
+      state: "converted",
+      output: [".vscode/mcp.json"],
+      note: "the servers under servers (VS Code's key), each kept whole; a ${NAME} reference becomes ${env:NAME}; the Copilot CLI reads the .mcp.json claude-code writes",
+    },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "not written yet: Copilot's hook events differ — planned for a later release" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
+  "agent-skills": {
+    rule: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    agent: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    command: {
+      state: "converted",
+      output: [".agents/skills/<name>/SKILL.md"],
+      note: "written as a skill only a person invokes (disable-model-invocation: true), read by every tool that reads .agents/skills/; a command and a skill with one name fail the plan",
+    },
+    skill: {
+      state: "converted",
+      output: [".agents/skills/<name>/<file>"],
+      note: "copied into .agents/skills/<name>/; a single-file skill becomes <name>/SKILL.md",
+    },
+    mcp: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -217,14 +294,24 @@ const writtenIs: [
   Equal<Written<"claude-code">, "rule" | "agent" | "command" | "skill" | "mcp" | "script" | "hook">,
   Equal<Written<"kiro">, "rule" | "agent" | "command" | "skill" | "mcp" | "steering">,
   Equal<Written<"agents-md">, "rule">,
-] = [true, true, true];
+  Equal<Written<"cursor">, "rule" | "agent" | "mcp">,
+  Equal<Written<"copilot">, "rule" | "agent" | "command" | "mcp">,
+  Equal<Written<"agent-skills">, "command" | "skill">,
+] = [true, true, true, true, true, true];
 void writtenIs;
 
-/** How a target words the warning for a type it does not write. Not part of `targets --json`. */
-const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type" }> = {
+/**
+ * How a target words the warning for a type it does not write, and the "through X" cells (spec 61 §6.1): a type another
+ * target writes into a file this tool reads is warned unless that carrier is among the workspace's targets and the ingredient
+ * is aimed at it. Not part of `targets --json`.
+ */
+const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Target>> }> = {
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
+  cursor: { label: "Cursor", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
+  copilot: { label: "Copilot", per: "type", carriers: { skill: "agent-skills" } },
+  "agent-skills": { label: "Agent Skills", per: "type" },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {
@@ -245,7 +332,13 @@ export function written<T extends Target>(
   warn: (msg: string) => void,
   matrix: Record<Target, Record<IngredientType, Capability>> = CAPABILITIES,
 ): Walk<T> {
-  const { label, per } = SKIP_WARNING[target];
+  const { label, per, carriers } = SKIP_WARNING[target];
+  // A "through X" cell whose carrier is among the targets and writes this ingredient (it is aimed there): the content
+  // reaches the tool in X's file — nothing to say. An ingredient whose `targets` leave the carrier out is warned.
+  const carried = (ing: ResolvedIngredient) => {
+    const c = carriers?.[ing.meta.type];
+    return c !== undefined && resolution.targets.includes(c) && appliesTo(effectiveTargets(ing.meta, resolution), c);
+  };
   let started = false;
   let finished = false;
   function* walk(): Generator<WrittenIngredient<T>> {
@@ -253,7 +346,7 @@ export function written<T extends Target>(
     const skips = (ing: ResolvedIngredient) => matrix[target][ing.meta.type].state === "unsupported";
     if (per === "type") {
       const byType = new Map<string, string[]>();
-      for (const ing of aimed) if (skips(ing)) byType.set(ing.meta.type, [...(byType.get(ing.meta.type) ?? []), ing.ref]);
+      for (const ing of aimed) if (skips(ing) && !carried(ing)) byType.set(ing.meta.type, [...(byType.get(ing.meta.type) ?? []), ing.ref]);
       for (const [type, refs] of byType)
         warn(`${target}: ${refs.length} ${type} ingredient(s) have no ${label} equivalent — skipped: ${refs.join(", ")}`);
     }
@@ -262,7 +355,7 @@ export function written<T extends Target>(
         // The one narrowing cast: the matrix said this target writes the type (with a test table the
         // static type and what is yielded can disagree — in that test only).
         yield ing as WrittenIngredient<T>;
-      } else if (per === "ingredient") {
+      } else if (per === "ingredient" && !carried(ing)) {
         warn(`${target}: ${ing.meta.type} ${ing.ref} has no ${label} equivalent — skipped`);
       }
     }

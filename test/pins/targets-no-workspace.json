@@ -194,6 +194,178 @@
           "note": "skipped with a warning when aimed at this target"
         }
       }
+    },
+    {
+      "name": "cursor",
+      "inUse": null,
+      "capabilities": {
+        "rule": {
+          "state": "converted",
+          "output": [
+            ".cursor/rules/<name>.mdc"
+          ],
+          "note": "written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; a .claude/rules/ reference in the body names the file a target writes for that rule; with agents-md among the targets, an always-on rule with the default targets is left to AGENTS.md"
+        },
+        "agent": {
+          "state": "converted",
+          "output": [
+            ".cursor/agents/<name>.md"
+          ],
+          "note": "name, description and model kept; tools have no Cursor field and are dropped with a warning"
+        },
+        "command": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agent-skills: Cursor moved commands to skills, written to .agents/skills/ by the agent-skills target"
+        },
+        "skill": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agent-skills: Cursor reads .agents/skills/, written by the agent-skills target"
+        },
+        "mcp": {
+          "state": "converted",
+          "output": [
+            ".cursor/mcp.json"
+          ],
+          "note": "the servers under mcpServers; a ${NAME} reference becomes ${env:NAME}"
+        },
+        "script": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "steering": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "not written yet: Cursor's hook events differ — planned for a later release"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        }
+      }
+    },
+    {
+      "name": "copilot",
+      "inUse": null,
+      "capabilities": {
+        "rule": {
+          "state": "converted",
+          "output": [
+            ".github/instructions/<name>.instructions.md",
+            ".github/copilot-instructions.md"
+          ],
+          "note": "a scoped rule to .github/instructions/ with applyTo from fileMatchPattern; every always-on rule joined into .github/copilot-instructions.md, but with agents-md among the targets an always-on rule with the default targets is left to AGENTS.md; a manual or an auto rule has no Copilot equivalent and is skipped with a warning; VS Code also reads .claude/rules/, so with claude-code on it loads a scoped rule twice"
+        },
+        "agent": {
+          "state": "converted",
+          "output": [
+            ".github/agents/<name>.agent.md"
+          ],
+          "note": "name, description and model kept; tools mapped to Copilot's aliases (read, edit, search, execute, web, agent, todo), a tool with no alias dropped with a warning"
+        },
+        "command": {
+          "state": "converted",
+          "output": [
+            ".github/prompts/<name>.prompt.md"
+          ],
+          "note": "written as a VS Code prompt file with description, argument-hint and agent: agent; with agent-skills among the targets, a command with the default targets is left to .agents/skills/"
+        },
+        "skill": {
+          "state": "unsupported",
+          "output": [],
+          "note": "through agent-skills: Copilot reads .agents/skills/, written by the agent-skills target"
+        },
+        "mcp": {
+          "state": "converted",
+          "output": [
+            ".vscode/mcp.json"
+          ],
+          "note": "the servers under servers (VS Code's key), each kept whole; a ${NAME} reference becomes ${env:NAME}; the Copilot CLI reads the .mcp.json claude-code writes"
+        },
+        "script": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "steering": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "not written yet: Copilot's hook events differ — planned for a later release"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        }
+      }
+    },
+    {
+      "name": "agent-skills",
+      "inUse": null,
+      "capabilities": {
+        "rule": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "agent": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "command": {
+          "state": "converted",
+          "output": [
+            ".agents/skills/<name>/SKILL.md"
+          ],
+          "note": "written as a skill only a person invokes (disable-model-invocation: true), read by every tool that reads .agents/skills/; a command and a skill with one name fail the plan"
+        },
+        "skill": {
+          "state": "converted",
+          "output": [
+            ".agents/skills/<name>/<file>"
+          ],
+          "note": "copied into .agents/skills/<name>/; a single-file skill becomes <name>/SKILL.md"
+        },
+        "mcp": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "script": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "steering": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "hook": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        },
+        "service": {
+          "state": "unsupported",
+          "output": [],
+          "note": "skipped with a warning when aimed at this target"
+        }
+      }
     }
   ],
   "warnings": []

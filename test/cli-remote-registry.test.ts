@@ -180,14 +180,14 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
   it("targets never fetches: no cache → unmarked with a warning; once cached → marked, and no new fetch", async () => {
     const { home, run } = await remoteWs();
     const before = JSON.parse(run(["targets", "--json"]).stdout);
-    expect(before.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null]);
+    expect(before.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null, null, null, null]);
     expect(before.warnings).toHaveLength(1);
     expect(before.warnings[0].startsWith("targets in use not shown: ")).toBe(true);
     expect(run(["status"]).code).toBe(0);
     const entry = path.join(home, "forges", (await fs.readdir(path.join(home, "forges")))[0]);
     const stamp = await fs.readFile(path.join(entry, "fetched"), "utf8");
     const after = JSON.parse(run(["targets", "--json"]).stdout);
-    expect(after.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, false, false]);
+    expect(after.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, false, false, false, false, false]);
     expect(after.warnings).toEqual([]);
     expect(await fs.readFile(path.join(entry, "fetched"), "utf8")).toBe(stamp);
   });

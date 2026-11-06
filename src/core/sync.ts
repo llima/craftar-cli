@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
+import { readsNativeTargets, firstNewTarget } from "./native-targets.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor, listsOf } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
@@ -15,17 +16,20 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
 import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockV2, type LockV3, type Owner, type Target, type WorkspaceConfig } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockV2, type LockV3, type LockV4, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyOwner } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
+import { cursor } from "../emitters/cursor.js";
+import { copilot } from "../emitters/copilot.js";
+import { agentSkills } from "../emitters/agent-skills.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { decodeForScan } from "./secrets.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
-import { appliesTo, effectiveTargets } from "../emitters/shared.js";
+import { appliesTo, carriedPath, carriedTo, carrierFile, effectiveTargets } from "../emitters/shared.js";
 import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
 import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
@@ -39,7 +43,7 @@ export { AGENTS_MD_BUDGET_KEY };
 export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
 
 // Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
-const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd };
+const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor, copilot, "agent-skills": agentSkills };
 
 /**
  * Runs one target's emitter on the walk of what the matrix says it writes. The walk warns about the
@@ -372,6 +376,11 @@ export interface Plan {
   /** Paths of planned texts reworded because of agents-md.primary, sorted (spec 41 §4.4); [] with the mode off. */
   reworded: string[];
   /**
+   * Files a skipping target does not write because a carried skip left their content to the carrier's file (spec 61 §6.1, §9),
+   * sorted by path: what `explain` answers for such a path and what the orphan reason names. [] for a workspace with no new target.
+   */
+  carried: Array<{ path: string; ingredient: string; writtenTo: string; carrier: string }>;
+  /**
    * Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off; otherwise holds
    * the hand-written entries that name files the plan does not write.
    */
@@ -578,7 +587,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
   const declared = new Map<string, Set<string>>(); // section key → names declared by resolved ingredients
   const byRef: Plan["sections"] = new Map();
   let firstMarker: string | null = null;
-  const parseOpts = { targets: readsTargetSections(forge.manifest) };
+  const parseOpts = { targets: readsTargetSections(forge.manifest), nativeTargets: readsNativeTargets(forge.manifest) };
   for (const ing of resolution.ingredients) {
     const key = sectionKey(ing.meta);
     const names = declared.get(key) ?? new Set<string>();
@@ -981,12 +990,16 @@ export async function plan(ws: Workspace): Promise<Plan> {
 
     // Scan the planned files for misplaced placeholders (not alone on line).
     // This detects lines in the PLANNED content, not the ingredient body.
-    // Applies to rules (.claude/rules/<name>.md, .kiro/steering/<name>.md) and AGENTS.md.
+    // Applies to rule bodies (.claude/rules/<name>.md, .kiro/steering/<name>.md, and since spec 61 .cursor/rules/<name>.mdc,
+    // .github/instructions/<name>.instructions.md and .github/copilot-instructions.md) and AGENTS.md.
     const misplacedLocations: string[] = [];
     const isRuleOrSteeringOrAgentsMd = (p: string) =>
       p === "AGENTS.md" ||
+      p === ".github/copilot-instructions.md" ||
       /^\.claude\/rules\/[^/]+\.md$/.test(p) ||
-      /^\.kiro\/steering\/[^/]+\.md$/.test(p);
+      /^\.kiro\/steering\/[^/]+\.md$/.test(p) ||
+      /^\.cursor\/rules\/[^/]+\.mdc$/.test(p) ||
+      /^\.github\/instructions\/[^/]+\.instructions\.md$/.test(p);
 
     for (const f of planned) {
       if (!isRuleOrSteeringOrAgentsMd(f.path)) continue;
@@ -1052,7 +1065,27 @@ export async function plan(ws: Workspace): Promise<Plan> {
   }
 
   const overrideConflicts = overrideConflictsOf(ws.forge, resolution);
-  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd, listCiting: [...listCiting].sort() };
+  const carried = carriedFiles(resolution, planned);
+  return { resolution, files: planned, warnings, sections: sections.byRef, params, missingParams: missing, agentsMd, reworded, kiroResources, indexed, overrideConflicts, claudeMd, listCiting: [...listCiting].sort(), carried };
+}
+
+/** Plan.carried (spec 61 §6.1, §9): for each target the workspace names, the files a carried skip kept it from writing. */
+function carriedFiles(resolution: Resolution, planned: readonly PlannedFile[]): Plan["carried"] {
+  const plannedPaths = new Set(planned.map((f) => f.path));
+  const byPath = new Map<string, Plan["carried"][number]>();
+  for (const ing of resolution.ingredients) {
+    for (const t of resolution.targets) {
+      // carriedTo already requires the default targets, so the ingredient is aimed at t
+      const carrier = carriedTo(ing.meta, t, resolution);
+      if (carrier === null) continue;
+      const at = carriedPath(t, ing.meta, ing.ref);
+      if (at === null || plannedPaths.has(at.path) || byPath.has(at.path)) continue;
+      // An aggregate (several rules) is held by the carrier as a whole: AGENTS.md
+      const writtenTo = at.ingredient === ing.ref ? carrierFile(carrier, ing.meta) : carrier;
+      byPath.set(at.path, { path: at.path, ingredient: at.ingredient, writtenTo, carrier });
+    }
+  }
+  return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /**
@@ -1267,7 +1300,9 @@ export function claudeMdBlockedMessage(file: string): string {
  */
 export function orphanReason(p: Plan, statuses: readonly FileStatus[], path: string): string {
   const s = statuses.find((x) => x.path === path);
-  return s !== undefined && primaryOrphan(p, s) ? "orphan: written to AGENTS.md only (agents-md.primary)" : "orphan: no longer produced by the Forge";
+  if (s !== undefined && primaryOrphan(p, s)) return "orphan: written to AGENTS.md only (agents-md.primary)";
+  const carried = p.carried.find((c) => c.path === path);
+  return carried ? `orphan: written to ${carried.carrier} only` : "orphan: no longer produced by the Forge";
 }
 
 /** Returns true when the orphan is due to agents-md.primary (spec 41 §4.8). */
@@ -1345,7 +1380,7 @@ export interface FileStatus {
   target?: Owner;
   ingredient?: string;
   planned?: PlannedFile;
-  lock?: LockEntry | LockEntryV3;
+  lock?: LockEntry | LockEntryV3 | LockEntryV4;
   /** Set only on a row whose path escapes the workspace (spec 48 §4.3); `statusReport` drops it, so it reaches no `--json`. */
   escapes?: Escape;
   /** `hashNormalized` of the bytes `status()` read at this path; null when nothing was read (absent, not a regular file, or a path that escapes). */
@@ -1355,7 +1390,7 @@ export interface FileStatus {
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
-function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3): boolean {
+function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3 | LockEntryV4): boolean {
   return hashNormalized(disk) === entry.hash || (!isUtf8(disk) && legacyHash(disk) === entry.hash);
 }
 
@@ -1451,7 +1486,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];
-  const entries: LockEntryV3[] = [];
+  const entries: LockEntryV4[] = [];
 
   // Compute once, used per row for escape checks with a fresh cache each time.
   const root = await containRoot(ws.root);
@@ -1551,10 +1586,16 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     }
   }
 
-  // Schema 3 when any entry has target `services`; otherwise schema 2 (spec 31 §5.2, spec 13 §5.2).
+  // Lock schema selection (spec 31 §5.2, spec 61 §7):
+  // - Schema 4 when targets include a native target (cursor, copilot, agent-skills), OR when any entry has a native target
+  //   (including kept entries from a previous lock) — even if no file is emitted for it.
+  // - Schema 3 when any entry has target `services` (and no native target in targets or entries).
+  // - Schema 2 otherwise.
   const sortedEntries = entries.sort((a, b) => a.path.localeCompare(b.path));
   const hasServices = entries.some((e) => e.target === "services");
-  // Build the shared part once; the two branches differ only in `schema` and in the entry type.
+  const nativeTarget = firstNewTarget(p.resolution.targets);
+  const hasNativeEntry = entries.some((e) => !isLegacyOwner(e.target));
+  // Build the shared part once; the branches differ only in `schema` and in the entry type.
   const base = {
     forge: { source: ws.config.forge, ref: ws.origin.ref, commit: ws.forge.commit },
     profile: ws.config.profile,
@@ -1562,11 +1603,15 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     targets: p.resolution.targets,
     generatedAt: new Date().toISOString(),
   };
-  const built: LockV2 | LockV3 = hasServices
-    ? { schema: 3, ...base, files: sortedEntries }
-    // The narrowing cast is sound: hasServices is false, so no entry has target "services",
-    // thus every entry's target is a Target (claude-code | kiro | agents-md).
-    : { schema: 2, ...base, files: sortedEntries as LockEntry[] };
+  const built: LockV2 | LockV3 | LockV4 = nativeTarget !== null || hasNativeEntry
+    ? { schema: 4, ...base, files: sortedEntries }
+    : hasServices
+    // The narrowing casts are sound: nativeTarget is null and hasNativeEntry is false, so targets has no native target
+    // (cursor, copilot, agent-skills) and no entry has one; every entry's target is a legacy owner (claude-code | kiro | agents-md | services).
+    ? { schema: 3, ...base, targets: base.targets as LegacyTarget[], files: sortedEntries as LockEntryV3[] }
+    // The narrowing casts are sound: hasServices is false, no native target, and no native entry, so targets has no
+    // native target and no entry has target "services" or a native target; every target and entry target is a LegacyTarget.
+    : { schema: 2, ...base, targets: base.targets as LegacyTarget[], files: sortedEntries as LockEntry[] };
   // Rewritten only when its content changes: generatedAt is when it last did (Ruling 10). A schema 1
   // lock always differs, so the first sync with this craftar upgrades it.
   const onDisk = opts.dryRun ? null : await readLock(ws.root);
@@ -1576,7 +1621,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   return { written, removed, skipped, lock };
 }
 
-function entry(f: PlannedFile): LockEntryV3 {
+function entry(f: PlannedFile): LockEntryV4 {
   return { path: f.path, hash: hashNormalized(f.content), target: f.target, ingredient: f.ingredient };
 }
 

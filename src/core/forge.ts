@@ -24,6 +24,8 @@ import { readsSectionFiles, resolveSectionFiles, unnamedSectionFiles, type Secti
 import { checkLocals, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
 import { checkFamilies, familyOf, profileExtendsNearMiss, readsProfileExtends } from "./profile-extends.js";
+import { readsNativeTargets, nativeTargetNearMiss } from "./native-targets.js";
+import { isLegacyTarget } from "../schema/index.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -138,8 +140,19 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     const m = lists ? null : listDeclarationNearMiss(file, params);
     if (m) throw new Error(m);
   };
+  // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor, copilot, agent-skills) in an ingredient's or profile's `targets` is a near miss.
+  const nativeGate = readsNativeTargets(manifest);
+  const checkTargets = (file: string, targets: readonly string[] | "*") => {
+    if (nativeGate || targets === "*") return;
+    for (const t of targets) {
+      if (!isLegacyTarget(t)) {
+        throw new Error(nativeTargetNearMiss(file, "targets", t));
+      }
+    }
+  };
   for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"), skip)) {
     listNearMiss(`${posixRel(dir)}/ingredient.yaml`, meta.params);
+    checkTargets(`${posixRel(dir)}/ingredient.yaml`, meta.targets);
     if (ingredients.has(ref)) throw new Error(`duplicate ingredient ${ref} (${dir})`);
     ingredients.set(ref, { ref, dir, meta, forgeRoot: contain });
     ingredientPaths.set(ref, posixRel(dir));
@@ -211,6 +224,8 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
           const left = await unnamedSectionFiles(folder, `profiles/${d.name}`, r.files);
           if (left.length) unnamed.set(p.name, left);
         }
+        // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor, copilot, agent-skills) in a profile's `targets` is a near miss.
+        checkTargets(declaring, p.targets);
         profiles.set(p.name, p);
         profileFiles.set(p.name, declaring);
         writtenKeys.set(p.name, read!.keys);
@@ -255,6 +270,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
       const seenRefs = new Map<string, string>(); // lower-cased ref → path (L9)
       for (const { ref, dir, meta } of await readIngredientTree(sub, path.join(folder, "ingredients"), skip)) {
         listNearMiss(`${posixRel(dir)}/ingredient.yaml`, meta.params);
+        checkTargets(`${posixRel(dir)}/ingredient.yaml`, meta.targets);
         const at = posixRel(dir);
         const prior = seenRefs.get(ref.toLowerCase());
         if (prior !== undefined) {

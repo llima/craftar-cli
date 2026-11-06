@@ -55,7 +55,7 @@ import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { slotLabel } from "./core/integrations.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, carriedFile, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, unheldMessage, type UnheldPath } from "./core/forge.js";
 import { writeForgeFile } from "./core/forge-write.js";
@@ -112,7 +112,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.0.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.1.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -398,7 +398,7 @@ program
   .option("--new-profile <name>", "create this profile in the Forge directory (recipes and targets from --like and the recipe flags), then start the workspace on it; nothing is committed")
   .option("--like <profile>", "with --new-profile: start the new profile's recipes and targets from this profile's — nothing else of it is copied")
   .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
-  .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md); omitted, the workspace follows the profile's")
+  .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md, cursor, copilot, agent-skills); omitted, the workspace follows the profile's")
   .option("--add-recipe <name>", "add a recipe to the profile's, or to the new profile's with --new-profile (repeatable)", collect, [])
   .option("--remove-recipe <name>", "remove a recipe from the profile's, or from the new profile's with --new-profile (repeatable)", collect, [])
   .option("--replace", "let --add-recipe take a slot another recipe holds", false)
@@ -904,7 +904,9 @@ program
       if (only && s.path !== only) continue;
       // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
       const isPrimary = primaryOrphan(p, s);
-      if (await printFileDiff(ws.root, s, { isPrimary })) shown++;
+      // Spec 61 §6.1: an orphan a carried skip left names its carrier
+      const carriedTo = p.carried.find((c) => c.path === s.path)?.carrier;
+      if (await printFileDiff(ws.root, s, { isPrimary, carriedTo })) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));
     // exitCode, not process.exit: exit drops a piped diff still queued for a slow reader (spec 19 §3.1)
@@ -968,7 +970,7 @@ async function checkGitSource(o: { workspace: string; check: boolean; committed?
 }
 
 /** What `craftar diff` prints for one file `sync --check` refuses; `drift show <path>` prints the same for a drifted one. */
-async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: boolean } = {}): Promise<boolean> {
+async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: boolean; carriedTo?: string } = {}): Promise<boolean> {
   // What to show is decided in the core (`diffReport`); the headers and the paint are this command's.
   const [row] = await diffReport({ root }, [s], { withholdMcp: false });
   // Nothing to show for `unchanged` and `adopt`: says so, for the caller's count
@@ -979,7 +981,11 @@ async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: bo
   } else if (s.state === "orphan") {
     // A removal: the file exists on disk but the Forge no longer produces it
     console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
-    const orphanReason = opts.isPrimary ? "written to AGENTS.md only — sync removes it" : "no longer produced — sync removes it";
+    const orphanReason = opts.isPrimary
+      ? "written to AGENTS.md only — sync removes it"
+      : opts.carriedTo !== undefined
+        ? `written to ${opts.carriedTo} only — sync removes it`
+        : "no longer produced — sync removes it";
     console.log(pc.bold(`+++ ${s.path} (forge: ${orphanReason})`));
   } else {
     console.log(pc.bold(`--- ${s.path} (disk, ${s.state})`));
@@ -1344,7 +1350,15 @@ program
     warnStderr(ws.warnings);
     const p = await plan(ws);
     const f = explainFile(ws, p, file.replace(/\\/g, "/"));
-    if (!f) fail(notProduced(file, ws.config.profile));
+    if (!f) {
+      // Spec 61 §6.1: a file a carried skip left to its carrier is explained by that carrier, exit 0
+      const c = carriedFile(p, file.replace(/\\/g, "/"));
+      if (!c) fail(notProduced(file, ws.config.profile));
+      console.log(pc.bold(c.path));
+      console.log(`  written to  ${c.writtenTo}${pc.dim("  (the tool reads it there; this target does not write it)")}`);
+      console.log(`  ingredient  ${c.ingredient}`);
+      return;
+    }
     console.log(pc.bold(f.path));
     console.log(`  target      ${f.target}`);
     console.log(`  ingredient  ${f.ingredient}${f.origin ? pc.dim(`  (imported from ${f.origin.workspace}:${f.origin.path})`) : ""}`);
@@ -1359,7 +1373,7 @@ program
       console.log(`  source      ${where}`);
     }
     if (f.via) console.log(`  via recipes ${f.via.join(" → ")}`);
-    // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md (rule/*) is not one ingredient.
+    // Spec 11 §4.2 (Ruling 15): which layer filled each section. AGENTS.md and .github/copilot-instructions.md (rule/*) are not one ingredient.
     if (f.sections.length) {
       const layer = (l: SectionLayer) =>
         l === "profile" ? `profile ${p.resolution.profile.name}` : typeof l === "string" ? l : "recipe" in l ? `recipe ${l.recipe}` : `profile ${l.profile}`;

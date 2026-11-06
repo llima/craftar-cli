@@ -163,7 +163,7 @@ describe("craftar mcp — launch refusals: exit 1, one line on stderr, nothing o
     expect(done).toMatchObject({
       code: 1,
       stdout: "",
-      stderr: "error: invalid craftar.yaml: targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md'\n",
+      stderr: "error: invalid craftar.yaml: targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills'\n",
     });
   });
 

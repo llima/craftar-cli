@@ -4,7 +4,7 @@ import { renderDiff } from "../core/diff.js";
 import { oneLine } from "../core/doctor.js";
 import { isMissing, listWorkspaces, readRegistry, type WorkspaceRow } from "../core/registry.js";
 import { credentialFault, CREDENTIAL_HIDDEN, refHoldsCredentials } from "../core/remote.js";
-import { EXAMPLE_CONTENT_HIDDEN, diffReport, explainFile, orphanDriftBody, statusReport } from "../core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, carriedFile, diffReport, explainFile, orphanDriftBody, statusReport } from "../core/report.js";
 import { statusDigest, syncToolResult, syncWorkspace } from "../core/write-actions.js";
 import { EXAMPLE_SETTINGS } from "../emitters/shared.js";
 import type { Lock } from "../schema/index.js";
@@ -263,7 +263,10 @@ export async function route(req: RouteRequest, deps: RouteDeps): Promise<RouteAn
   if (what === "explain") {
     // Never `notProduced`'s message: it quotes the path asked.
     const explained = explainFile(ws, p, wanted);
-    return explained ? { status: 200, body: explained } : { status: 404, body: NOT_FOUND };
+    if (explained) return { status: 200, body: explained };
+    // Spec 61 §6.1: a file a carried skip left to its carrier answers as the explain tool does
+    const carried = carriedFile(p, wanted);
+    return carried ? { status: 200, body: carried } : { status: 404, body: NOT_FOUND };
   }
   // The row whose path is the string asked, character for character: nothing is opened that status() did not name.
   const row = st.find((s) => s.path === wanted);

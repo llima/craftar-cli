@@ -31,11 +31,33 @@ function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
 /* Targets                                                              */
 /* ------------------------------------------------------------------ */
 
-export const TARGETS = ["claude-code", "kiro", "agents-md"] as const;
+/**
+ * All AI-coder targets Craftar supports. Spec 61 §7: `cursor` added at Forge schema 15, `copilot` at schema 15.
+ * Spec 61 §6, Ruling 3: `agent-skills` writes `.agents/skills/`, read by Cursor, Copilot, Codex and others.
+ */
+export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot", "agent-skills"] as const;
 export type Target = (typeof TARGETS)[number];
 export const TargetSchema = z.enum(TARGETS);
 
-/** Owners of lock entries: AI-coder targets (`claude-code`, `kiro`, `agents-md`) plus `services`. */
+/**
+ * The AI-coder targets Craftar supported before schema 15 (spec 61 §7, Ruling 4).
+ * This list is frozen: it never grows. Used for lock schemas 1–3.
+ */
+export const LEGACY_TARGETS = ["claude-code", "kiro", "agents-md"] as const;
+export type LegacyTarget = (typeof LEGACY_TARGETS)[number];
+export const LegacyTargetSchema = z.enum(LEGACY_TARGETS);
+
+/** Returns true when `t` is one of the legacy targets (before schema 15). */
+export function isLegacyTarget(t: string): t is LegacyTarget {
+  return (LEGACY_TARGETS as readonly string[]).includes(t);
+}
+
+/** Returns true when `t` is a legacy owner: a legacy target or "services" (lock schemas 1–3). */
+export function isLegacyOwner(t: string): boolean {
+  return isLegacyTarget(t) || t === "services";
+}
+
+/** Owners of lock entries: AI-coder targets (`claude-code`, `kiro`, `agents-md`, `cursor`) plus `services`. */
 export const OWNERS = [...TARGETS, "services"] as const;
 export type Owner = (typeof OWNERS)[number];
 export const OwnerSchema = z.enum(OWNERS);
@@ -1010,6 +1032,8 @@ export const FORGE_SCHEMA_LOCAL_OVERRIDE = 12;
 export const FORGE_SCHEMA_PROFILE_EXTENDS = 13;
 /** Forge schema that reads a param declared `type: list` and its filtered placeholders, `{{ key | py }}` (spec 55 §4.1). */
 export const FORGE_SCHEMA_LIST_PARAMS = 14;
+/** Forge schema that allows native targets (cursor, copilot, agent-skills) in ingredients/profiles/sections (spec 61 §7). */
+export const FORGE_SCHEMA_NATIVE_TARGETS = 15;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -1029,6 +1053,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_LOCAL_OVERRIDE),
       z.literal(FORGE_SCHEMA_PROFILE_EXTENDS),
       z.literal(FORGE_SCHEMA_LIST_PARAMS),
+      z.literal(FORGE_SCHEMA_NATIVE_TARGETS),
     ])
     .default(1),
   description: z.string().optional(),
@@ -1069,15 +1094,16 @@ export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 /* Lockfile (craftar.lock)                                              */
 /* ------------------------------------------------------------------ */
 
-/** Lock entry for schema 1 and 2: target is an AI-coder target. */
+/** Lock entry for schema 1 and 2: target is a legacy AI-coder target (before schema 15). */
 export const LockEntrySchema = z.object({
   path: z.string(),
   hash: z.string(),
-  target: TargetSchema,
+  target: LegacyTargetSchema,
   ingredient: z.string(),
 });
-/** Lock entry for schema 3: target is any owner (AI-coder targets plus `services`). Derived from LockEntrySchema. */
-export const LockEntrySchemaV3 = LockEntrySchema.extend({ target: OwnerSchema });
+/** Lock entry for schema 3: target is a legacy owner (legacy AI-coder targets plus `services`). Derived from LockEntrySchema. */
+const LegacyOwnerSchema = z.enum([...LEGACY_TARGETS, "services"]);
+export const LockEntrySchemaV3 = LockEntrySchema.extend({ target: LegacyOwnerSchema });
 /** Lock schema 1 (craftar ≤ 0.10.x): read, never written since 0.11.0. */
 export const LockSchemaV1 = z.object({
   schema: z.literal(1),
@@ -1100,7 +1126,7 @@ export const LockSchemaV2 = z.object({
   profile: z.string(),
   /** Resolution.recipes: resolved, in application order (extends parents included). */
   recipes: z.array(z.string()),
-  targets: z.array(TargetSchema),
+  targets: z.array(LegacyTargetSchema),
   /** When the lock's content last changed (Ruling 10). */
   generatedAt: z.string(),
   files: z.array(LockEntrySchema),
@@ -1110,19 +1136,53 @@ export const LockSchemaV3 = LockSchemaV2.extend({
   schema: z.literal(3),
   files: z.array(LockEntrySchemaV3),
 });
+/**
+ * Lock entry for schema 4 (spec 61 §7): target is any owner (`OwnerSchema`), including native targets like `cursor`.
+ */
+export const LockEntrySchemaV4 = z.object({
+  path: z.string(),
+  hash: z.string(),
+  target: OwnerSchema,
+  ingredient: z.string(),
+});
+/**
+ * Lock schema 4 (spec 61 §7): written when a sync emits files for native targets (cursor, copilot, agent-skills).
+ * Every craftar before 1.1.0 refuses lock schema 4 by name; here it signals entries for a native target.
+ */
+export const LockSchemaV4 = z.object({
+  schema: z.literal(4),
+  forge: z.object({
+    /** craftar.yaml › forge as written (after the local merge); never holds credentials (spec 13 §4.3). */
+    source: z.string(),
+    /** The requested ref; null when none was given or the Forge is a path. */
+    ref: z.string().nullable(),
+    /** The resolved commit; null for a path Forge without git. */
+    commit: z.string().nullable(),
+  }),
+  profile: z.string(),
+  /** Resolution.recipes: resolved, in application order (extends parents included). */
+  recipes: z.array(z.string()),
+  /** All targets, including native targets like `cursor` (spec 61 §7). */
+  targets: z.array(TargetSchema),
+  /** When the lock's content last changed (Ruling 10). */
+  generatedAt: z.string(),
+  files: z.array(LockEntrySchemaV4),
+});
 /** Supported lock schemas; anything else is refused by name in `readLock`. */
-export const LOCK_SCHEMAS: readonly unknown[] = [1, 2, 3];
+export const LOCK_SCHEMAS: readonly unknown[] = [1, 2, 3, 4];
 // A lock with no `schema` key is version 1, as `.default(1)` read it before. A discriminated union
 // rejects a missing discriminator, so the key is supplied before the union sees it.
 export const LockSchema = z.preprocess(
   (v) => (v !== null && typeof v === "object" && !Array.isArray(v) && !Object.hasOwn(v, "schema") ? { ...v, schema: 1 } : v),
-  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2, LockSchemaV3]),
+  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2, LockSchemaV3, LockSchemaV4]),
 );
 export type Lock = z.infer<typeof LockSchema>;
 export type LockV2 = z.infer<typeof LockSchemaV2>;
 export type LockV3 = z.infer<typeof LockSchemaV3>;
+export type LockV4 = z.infer<typeof LockSchemaV4>;
 export type LockEntry = z.infer<typeof LockEntrySchema>;
 export type LockEntryV3 = z.infer<typeof LockEntrySchemaV3>;
+export type LockEntryV4 = z.infer<typeof LockEntrySchemaV4>;
 
 /* ------------------------------------------------------------------ */
 /* Workspace registry — $CRAFTAR_HOME/registry.json (spec 21 §5.2)      */

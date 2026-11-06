@@ -114,38 +114,38 @@ describe("effectiveTargets (spec 41 §4.2–§4.3)", () => {
 
   it("a. primary true, rule always, targets omitted → ['agents-md']", () => {
     const meta = ruleAlways();
-    expect(effectiveTargets(meta, { primary: true })).toEqual(["agents-md"]);
+    expect(effectiveTargets(meta, { primary: true, targets: [] })).toEqual(["agents-md"]);
   });
 
   it("b. primary true, rule always, targets: '*' written → ['agents-md']", () => {
     const meta = ruleAlways("*");
-    expect(effectiveTargets(meta, { primary: true })).toEqual(["agents-md"]);
+    expect(effectiveTargets(meta, { primary: true, targets: [] })).toEqual(["agents-md"]);
   });
 
   it("c. primary false, rule always → returns the very same reference as meta.targets", () => {
     const meta = ruleAlways();
-    expect(effectiveTargets(meta, { primary: false })).toBe(meta.targets);
+    expect(effectiveTargets(meta, { primary: false, targets: [] })).toBe(meta.targets);
   });
 
   it("d. primary true, rule inclusion: fileMatch → '*'", () => {
     const meta = ruleFileMatch();
-    expect(effectiveTargets(meta, { primary: true })).toBe("*");
+    expect(effectiveTargets(meta, { primary: true, targets: [] })).toBe("*");
   });
 
   it("e. primary true, rule always, targets: ['claude-code', 'agents-md'] → that array (toBe)", () => {
     const meta = ruleAlways(["claude-code", "agents-md"]);
-    expect(effectiveTargets(meta, { primary: true })).toBe(meta.targets);
+    expect(effectiveTargets(meta, { primary: true, targets: [] })).toBe(meta.targets);
   });
 
   it("f. primary true, agent → '*'", () => {
     const meta = agent();
-    expect(effectiveTargets(meta, { primary: true })).toBe("*");
+    expect(effectiveTargets(meta, { primary: true, targets: [] })).toBe("*");
   });
 
   it("g. primary true, steering → its targets (['kiro'])", () => {
     const meta = steering();
-    expect(effectiveTargets(meta, { primary: true })).toEqual(["kiro"]);
-    expect(effectiveTargets(meta, { primary: true })).toBe(meta.targets);
+    expect(effectiveTargets(meta, { primary: true, targets: [] })).toEqual(["kiro"]);
+    expect(effectiveTargets(meta, { primary: true, targets: [] })).toBe(meta.targets);
   });
 });
 

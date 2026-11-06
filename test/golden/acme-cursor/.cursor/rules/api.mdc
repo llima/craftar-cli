@@ -1,0 +1,6 @@
+---
+globs: "src/**/*.ts,test/**"
+alwaysApply: false
+---
+
+API.

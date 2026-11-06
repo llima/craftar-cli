@@ -4,6 +4,7 @@ import type { EmitBase, PlannedFile } from "./types.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { paramsFor, listsOf } from "../core/resolve.js";
 import type { Ingredient, Target } from "../schema/index.js";
+import { ENV_NAME, TARGETS } from "../schema/index.js";
 import { rendersServers, renderServer, renderLeaves, credentialIn, credentialMessage, entropyMessage, undeclaredMessage, type RenderedLeaves } from "../core/mcp-server.js";
 import { RULES_INDEX_LINE, RULES_INDEX_KEY, RULES_INDEX_TOKEN } from "../core/rules-index.js";
 import { metaFor } from "../core/metadata-params.js";
@@ -15,17 +16,62 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
 
 /**
  * The MCP file each target writes (spec 42 §5.2: shared by the emitters and doctor's mcp-launcher).
- * agents-md writes no MCP file (its mcp cell is unsupported), so it has no entry.
+ * agents-md and agent-skills write no MCP file (their mcp cells are unsupported), so they have no entries.
  */
-export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json" } as const satisfies Record<Exclude<Target, "agents-md">, string>;
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills">, string>;
+
+/** What effectiveTargets reads of a resolution: agents-md.primary and the workspace's targets. */
+export interface TargetsView {
+  primary: boolean;
+  targets: readonly string[];
+}
 
 /**
- * The targets an ingredient is aimed at in this workspace (spec 41 §4.3): its declared `targets`, except, under
- * agents-md.primary, an always-on rule with the default targets, which is aimed at agents-md alone. The one
- * answer to "is this rule AGENTS.md-only"; returns `meta.targets` itself when the mode is off.
+ * The skips that depend on the workspace's targets (spec 61 §6.1, §9): with its carrier among the targets, an ingredient
+ * the skip concerns is not written by the skipping targets — the tool reads it in the carrier's file instead.
  */
-export function effectiveTargets(meta: Ingredient, resolution: { primary: boolean }): "*" | string[] {
-  return agentsMdOnly(meta, resolution) ? ["agents-md"] : meta.targets;
+const CARRIED: ReadonlyArray<{ carrier: Target; writtenTo: string; skippers: readonly Target[]; concerns: (meta: Ingredient) => boolean }> = [
+  // §6.1: an always-on rule with the default targets is left to AGENTS.md, which Cursor and Copilot read.
+  { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["cursor", "copilot"], concerns: (m) => m.type === "rule" && m.inclusion === "always" && m.targets === "*" },
+  // §9: a command with the default targets is left to .agents/skills/, which Copilot reads; a command listed [copilot] keeps its prompt file.
+  { carrier: "agent-skills", writtenTo: ".agents/skills/", skippers: ["copilot"], concerns: (m) => m.type === "command" && m.targets === "*" },
+];
+
+/**
+ * The file a skipping target would have written for `meta` (spec 61 §6.1, §9): what `explain` and the orphan reason name when a
+ * carried skip left it to the carrier. Copilot's always-on rules share one aggregate, so that path is the aggregate's.
+ */
+export function carriedPath(target: string, meta: Ingredient, ref: string): { path: string; ingredient: string } | null {
+  if (target === "cursor" && meta.type === "rule") return { path: `.cursor/rules/${outName(meta)}.mdc`, ingredient: ref };
+  if (target === "copilot" && meta.type === "rule") return { path: ".github/copilot-instructions.md", ingredient: "rule/*" };
+  if (target === "copilot" && meta.type === "command") return { path: `.github/prompts/${outName(meta)}.prompt.md`, ingredient: ref };
+  return null;
+}
+
+/** The carrier's file that holds `meta` (spec 61 §6.1, §9, criterion 9): what `explain` names as `writtenTo`. */
+export function carrierFile(carrier: string, meta: Ingredient): string {
+  return carrier === ".agents/skills/" ? `.agents/skills/${outName(meta)}/SKILL.md` : carrier;
+}
+
+/** The carrier file that holds `meta` for `target` in this workspace (spec 61 §6.1, §9), or null when no skip applies. */
+export function carriedTo(meta: Ingredient, target: string, resolution: TargetsView): string | null {
+  for (const c of CARRIED)
+    if (c.concerns(meta) && (c.skippers as readonly string[]).includes(target) && resolution.targets.includes(target) && resolution.targets.includes(c.carrier)) return c.writtenTo;
+  return null;
+}
+
+/**
+ * The targets an ingredient is aimed at in this workspace (spec 41 §4.3, spec 61 §6.1): its declared `targets`, except
+ * - under agents-md.primary, an always-on rule with the default targets, aimed at agents-md alone; and
+ * - an ingredient a carried skip concerns (`carriedTo`), aimed at every target but the skipping ones.
+ * The one answer to "which targets write this"; returns `meta.targets` itself when neither applies, so a workspace that
+ * names no new target sees no change.
+ */
+export function effectiveTargets(meta: Ingredient, resolution: TargetsView): "*" | string[] {
+  if (agentsMdOnly(meta, resolution)) return ["agents-md"];
+  const skipped = TARGETS.filter((t) => carriedTo(meta, t, resolution) !== null);
+  if (!skipped.length) return meta.targets;
+  return TARGETS.filter((t) => !skipped.includes(t));
 }
 
 /** Under agents-md.primary, an always-on rule with the default targets: written to AGENTS.md alone (spec 41 §4.2). */
@@ -85,7 +131,7 @@ export interface RuleLookup {
 }
 
 /** Build the lookup maps for rule reference resolution, once per AGENTS.md. */
-export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: { primary: boolean } = { primary: false }): RuleLookup {
+export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: TargetsView = { primary: false, targets: [] }): RuleLookup {
   const rulesByName = new Map<string, ResolvedIngredient>();
   const steeringsByName = new Map<string, ResolvedIngredient>();
   const ruleTargets = new Map<string, "*" | string[]>();
@@ -101,6 +147,17 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: {
   return { rulesByName, steeringsByName, ruleTargets };
 }
 
+/**
+ * Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target that writes rules — cursor or copilot
+ * (spec 61 §10), where K1 generalises to "the file the citing target itself writes".
+ */
+export type RefMode = "agents-md" | "kiro" | "cursor" | "copilot";
+
+/** Whether a target that writes rules in its own file writes this one there (spec 61 §5.2: copilot skips a manual or an auto rule). */
+function ownWrites(mode: "cursor" | "copilot", meta: Ingredient): boolean {
+  return meta.type === "rule" && (mode === "cursor" || meta.inclusion === "always" || meta.inclusion === "fileMatch");
+}
+
 /** Rule reference state (spec 15 §4.2 for agents-md, spec 17 §4.2 for kiro). */
 export type RuleRefState = "A" | "B" | "C" | "D" | "K1" | "K2" | "K3" | "unknown";
 
@@ -113,7 +170,7 @@ export function ruleRefState(
   name: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro",
+  mode: RefMode,
 ): RuleRefState {
   const { rulesByName, steeringsByName, ruleTargets: effective } = lookup;
   const hasCc = targets.includes("claude-code");
@@ -121,6 +178,14 @@ export function ruleRefState(
   const hasMd = targets.includes("agents-md");
   const rule = rulesByName.get(name);
   const ruleTargets = effective.get(name);
+  if (mode === "cursor" || mode === "copilot") {
+    // Spec 61 §10: K1 is the file the citing target writes; then claude-code's, then AGENTS.md, as for kiro (no steering here)
+    if (rule && ruleTargets && targets.includes(mode) && appliesTo(ruleTargets, mode) && ownWrites(mode, rule.meta)) return "K1";
+    if (rule && ruleTargets && hasCc && appliesTo(ruleTargets, "claude-code")) return "K2";
+    if (rule && ruleTargets && hasMd && appliesTo(ruleTargets, "agents-md")) return "K3";
+    if (rule) return "D";
+    return "unknown";
+  }
   if (mode === "kiro") {
     // K1: kiro writes it — a rule or steering that admits kiro (spec 17 §4.2)
     if (rule && ruleTargets && hasKiro && appliesTo(ruleTargets, "kiro")) return "K1";
@@ -167,11 +232,22 @@ export function ruleReference(
   name: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro",
+  mode: RefMode,
 ): RuleReferenceResult {
   const state = ruleRefState(name, lookup, targets, mode);
   const hasCc = targets.includes("claude-code");
   const rule = lookup.rulesByName.get(name);
+  if (mode === "cursor" || mode === "copilot") {
+    switch (state) {
+      case "K1": return { state, text: ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) };
+      case "K2": return { state, text: `.claude/rules/${name}.md` };  // unchanged
+      case "K3": return { state, text: `AGENTS.md (rule: ${name})` };
+      case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+      case "unknown":
+        if (hasCc) return { state, text: `.claude/rules/${name}.md` };  // unchanged
+        return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: "no such rule" } };
+    }
+  }
   if (mode === "kiro") {
     switch (state) {
       case "K1": return { state, text: ruleFile("kiro", { name }) };
@@ -203,7 +279,7 @@ export function unresolvedRuleRefs(
   text: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro",
+  mode: RefMode,
 ): Array<{ line: number; name: string }> {
   const hasCc = targets.includes("claude-code");
   const result: Array<{ line: number; name: string }> = [];
@@ -255,7 +331,7 @@ export function resolveRuleRefs(
   citing: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro" = "agents-md",
+  mode: RefMode = "agents-md",
 ): { text: string; report: RefReport } {
   const report: RefReport = { reworded: [], others: [] };
   const hasCc = targets.includes("claude-code");
@@ -384,8 +460,11 @@ export function resolveRuleRefs(
           continue;
       }
     } else {
-      // agents-md mode (spec 15 §4.3)
-      switch (state) {
+      // agents-md mode (spec 15 §4.3); a new target's own mode reads K1 as B (its own file), K2 as A, K3 as C (spec 61 §10)
+      const own = mode === "cursor" || mode === "copilot";
+      const st: RuleRefState = own ? (({ K1: "B", K2: "A", K3: "C" } as Partial<Record<RuleRefState, RuleRefState>>)[state] ?? state) : state;
+      const bFile = own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
+      switch (st) {
         case "A":
           // State A: link unchanged, but text is now resolved like a token (spec 20 §4.1)
           // The text resolution already happened; we only emit a match if the text changed
@@ -396,7 +475,7 @@ export function resolveRuleRefs(
           }
           break;
         case "B":
-          replacement = `[${resolvedText}](${ruleFile("kiro", { name })}${frag ?? ""})`;
+          replacement = `[${resolvedText}](${bFile}${frag ?? ""})`;
           break;
         case "C":
           replacement = `[${resolvedText}](AGENTS.md)`;
@@ -546,8 +625,44 @@ export function outName(m: { name: string; as?: string }): string {
 }
 
 /** The file a target writes for a rule: the path AGENTS.md lists when that target writes it (spec 14). */
-export function ruleFile(target: "claude-code" | "kiro", m: { name: string; as?: string }): string {
+export function ruleFile(target: "claude-code" | "kiro" | "cursor" | "copilot", m: { name: string; as?: string; inclusion?: string }): string {
+  if (target === "cursor") return `.cursor/rules/${outName(m)}.mdc`;
+  // Copilot joins every always-on rule into one file (spec 61 §5.2)
+  if (target === "copilot") return m.inclusion === "always" ? ".github/copilot-instructions.md" : `.github/instructions/${outName(m)}.instructions.md`;
   return target === "claude-code" ? `.claude/rules/${outName(m)}.md` : `.kiro/steering/${outName(m)}.md`;
+}
+
+/**
+ * The rule references and the rules index of a new target's bodies (spec 61 §10): each body resolved in the target's own mode —
+ * a `.claude/rules/<x>.md` reference names the file the target writes, else claude-code's, else AGENTS.md — then, in a rule body at
+ * the index gate, the index expanded with the target's names. `finish` says, in one warning, the references reworded.
+ */
+export function ownRuleRefs(ctx: EmitBase, target: "cursor" | "copilot"): { resolve(text: string, citing: string): string; index(text: string, path: string): string; finish(): void } {
+  const lookup = buildRuleLookup(ctx.resolution.ingredients, ctx.resolution);
+  const dead: RefReport["reworded"] = [];
+  const seen = new Set<string>();
+  return {
+    resolve(text, citing) {
+      const r = resolveRuleRefs(text, citing, lookup, ctx.resolution.targets, target);
+      for (const e of r.report.reworded) {
+        const k = `${e.ref}|${e.citing}`;
+        if (!seen.has(k)) {
+          seen.add(k);
+          dead.push(e);
+        }
+      }
+      return r.text;
+    },
+    index(text, path) {
+      if (!ctx.resolution.rulesIndex) return text;
+      const r = expandRulesIndex(text, target, lookup, ctx.resolution);
+      if (r.listed > 0 || r.undescribed.length > 0 || r.expanded) ctx.reportIndex({ path, rules: r.listed, undescribed: r.undescribed, expanded: r.expanded });
+      return r.text;
+    },
+    finish() {
+      if (dead.length) ctx.warn(`${target}: ${formatDeadRefs(dead)}`);
+    },
+  };
 }
 
 /** The path to the example settings file generated by claude-code (spec 27 §4.2). */
@@ -861,7 +976,7 @@ function foldDescription(desc: string): string {
  */
 export function expandRulesIndex(
   text: string,
-  target: "claude-code" | "kiro" | "agents-md",
+  target: "claude-code" | "kiro" | "agents-md" | "cursor" | "copilot",
   lookup: RuleLookup,
   resolution: Resolution,
 ): ExpandRulesIndexResult {
@@ -887,7 +1002,7 @@ export function expandRulesIndex(
 
   // Build the index content once (it's the same for all occurrences)
   const rules = resolution.ingredients.filter((ing) => ing.meta.type === "rule");
-  const mode = target === "kiro" ? "kiro" : "agents-md";
+  const mode: RefMode = target === "kiro" || target === "cursor" || target === "copilot" ? target : "agents-md";
 
   // Group rules by inclusion for display order
   const alwaysOn: Array<{ name: string; path: string; desc: string | null }> = [];
@@ -1020,7 +1135,7 @@ export function expandRulesIndex(
  * Claude Code does not list such skills.
  */
 export function flatSkills(
-  resolution: { ingredients: readonly { meta: { type: string; name: string; as?: string; layout?: string; targets: "*" | string[] } }[]; primary: boolean },
+  resolution: { ingredients: readonly { meta: { type: string; name: string; as?: string; layout?: string; targets: "*" | string[] } }[]; primary: boolean; targets: readonly string[] },
   targets: readonly string[],
 ): string[] {
   if (!targets.includes("claude-code")) return [];
@@ -1045,4 +1160,37 @@ export function flatSkills(
 export function flatSkillWarning(names: string[], prefix = "claude-code"): string {
   const paths = names.map((n) => `.claude/skills/${n}.md`).join(", ");
   return `${prefix}: Claude Code does not list a skill written as one file — ${paths}; set layout: dir in each ingredient.yaml`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Environment reference transformation (spec 61 §3.3)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cursor's and VS Code's predefined variables (spec 61 §3.3, §3.4): these must NOT be transformed to `${env:…}`.
+ * See: https://cursor.com/docs/context/mcp
+ */
+const PREDEFINED = new Set(["workspaceFolder", "workspaceFolderBasename", "userHome", "pathSeparator"]);
+
+const ENV_REF = new RegExp(`\\$\\{(${ENV_NAME})\\}`, "g");
+
+/**
+ * A deep copy whose string values have `${NAME}` replaced with `${env:NAME}` — except for Cursor's
+ * predefined variables (`workspaceFolder`, `workspaceFolderBasename`, `userHome`, `pathSeparator`)
+ * which are kept as written. Keys and non-string values are copied unchanged.
+ */
+export function envReferences(v: unknown): unknown {
+  if (typeof v === "string") {
+    return v.replace(ENV_REF, (_match, name: string) => {
+      if (PREDEFINED.has(name)) return `\${${name}}`;
+      return `\${env:${name}}`;
+    });
+  }
+  if (Array.isArray(v)) return v.map(envReferences);
+  if (v !== null && typeof v === "object") {
+    const o: Record<string, unknown> = Object.create(null);
+    for (const [k, x] of Object.entries(v)) o[k] = envReferences(x);
+    return o;
+  }
+  return v;
 }

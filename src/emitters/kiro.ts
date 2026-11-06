@@ -57,7 +57,7 @@ export const kiro: Emitter<"kiro"> = {
     const targets = ctx.resolution.targets;
     const lookup = buildRuleLookup(ctx.resolution.ingredients, ctx.resolution);
     // For mode-off comparison (spec 41 §4.4), build lookup without primary
-    const lookupOff = primary ? buildRuleLookup(ctx.resolution.ingredients, { primary: false }) : null;
+    const lookupOff = primary ? buildRuleLookup(ctx.resolution.ingredients, { primary: false, targets: ctx.resolution.targets }) : null;
 
     // Collect reports for the warning (spec 17 §4.5)
     const reports: RefReport[] = [];
