@@ -1,5 +1,5 @@
 ---
-applyTo: ["src/**/*.ts","test/**"]
+applyTo: "src/**/*.ts,test/**"
 ---
 
 API.

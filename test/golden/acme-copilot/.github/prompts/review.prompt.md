@@ -1,4 +1,6 @@
 ---
-description: Review code
+description: "Review"
+argument-hint: "[file]"
+agent: agent
 ---
-Review.
+Review it.

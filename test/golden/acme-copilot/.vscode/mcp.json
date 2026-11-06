@@ -1,15 +1,19 @@
 {
   "servers": {
     "api": {
-      "type": "stdio",
       "command": "npx",
       "args": [
-        "api",
-        "--port",
-        "8080"
+        "${workspaceFolder}/api"
       ],
       "env": {
-        "TOKEN": "${API_TOKEN}"
+        "TOKEN": "${env:API_TOKEN}"
+      }
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "X-Key": "${env:KEY}"
       }
     }
   }
