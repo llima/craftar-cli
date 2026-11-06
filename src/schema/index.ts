@@ -51,6 +51,11 @@ export function isLegacyTarget(t: string): t is LegacyTarget {
   return (LEGACY_TARGETS as readonly string[]).includes(t);
 }
 
+/** Returns true when `t` is a legacy owner: a legacy target or "services" (lock schemas 1–3). */
+export function isLegacyOwner(t: string): boolean {
+  return isLegacyTarget(t) || t === "services";
+}
+
 /** Owners of lock entries: AI-coder targets (`claude-code`, `kiro`, `agents-md`, `cursor`) plus `services`. */
 export const OWNERS = [...TARGETS, "services"] as const;
 export type Owner = (typeof OWNERS)[number];

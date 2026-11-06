@@ -354,4 +354,88 @@ describe("native targets gate (spec 61 §7)", () => {
     const styleStatus = statuses2.find((st) => st.path === ".claude/rules/style.md");
     expect(styleStatus?.state).toBe("unchanged");
   });
+
+  it("10. Kept entry with native target → lock stays schema 4 even after removing native target from workspace", { timeout: atLeastWin32(60_000) }, async () => {
+    // Spec 61 §7 Correction 3: lock schema 4 must be used when any kept entry has a native target,
+    // even if the workspace targets no longer include the native target.
+    //
+    // Scenario:
+    // 1. Workspace with targets: [claude-code, cursor] at schema 15
+    // 2. Sync writes entries for both targets, lock schema 4
+    // 3. Hand-write lock with entry {path:".cursor/rules/x.mdc", target:"cursor"} as orphan-drift
+    // 4. Reduce workspace targets to [claude-code]
+    // 5. Apply should produce lock schema 4 (because of the kept cursor entry)
+    const ingredients: IngredientSpec[] = [
+      {
+        meta: { type: "rule", name: "style" },
+        files: { "rule.md": "# Style\nBe consistent.\n" },
+      },
+    ];
+    const recipes = [recipe("base", ["rule/style"])];
+    const profiles = [profile("acme", ["base"], ["claude-code", "cursor"])];
+
+    const s = kept(await scenario(
+      { ingredients, recipes, profiles },
+      { config: { profile: "acme" } },
+    ));
+    await fs.writeFile(
+      path.join(s.forgeRoot, "craftar.forge.yaml"),
+      YAML.stringify({ name: "test-forge", schema: 15 }),
+    );
+
+    // Step 1: Sync with targets [claude-code, cursor]
+    const ws1 = await loadWorkspace(s.wsRoot);
+    const p1 = await plan(ws1);
+    const lock1 = await readLock(s.wsRoot);
+    const statuses1 = await status(ws1, p1, lock1);
+    await apply(ws1, p1, statuses1);
+
+    // Verify lock is schema 4 with cursor target
+    const lockAfter1 = await readLock(s.wsRoot);
+    expect(lockAfter1!.schema).toBe(4);
+    expect(lockAfter1!.targets).toContain("cursor");
+
+    // Step 2: Hand-write a lock with an orphan cursor entry (simulating a kept entry)
+    // This represents a file that was synced but is now orphan-drift (kept until manually deleted)
+    const cursorFile = ".cursor/rules/orphan.mdc";
+    await writeFiles(s.wsRoot, {
+      [cursorFile]: "# Orphan rule\nThis is a hand-written file that becomes orphan-drift.\n",
+    });
+    const modifiedLock = {
+      ...lockAfter1!,
+      files: [
+        ...lockAfter1!.files,
+        { path: cursorFile, hash: "sha256:orphan", target: "cursor" as const, ingredient: "rule/orphan" },
+      ],
+      generatedAt: new Date().toISOString(),
+    };
+    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), JSON.stringify(modifiedLock, null, 2) + "\n");
+
+    // Step 3: Change workspace targets to [claude-code] only
+    await writeFiles(s.wsRoot, {
+      "craftar.yaml": YAML.stringify({ forge: "../forge", profile: "acme", targets: ["claude-code"] }),
+    });
+
+    // Step 4: Reload, plan, and apply
+    const ws2 = await loadWorkspace(s.wsRoot);
+    const p2 = await plan(ws2);
+    expect(p2.resolution.targets).toEqual(["claude-code"]); // no cursor in targets
+
+    const lock2 = await readLock(s.wsRoot);
+    const statuses2 = await status(ws2, p2, lock2);
+
+    // The orphan cursor entry should be skipped (orphan-drift)
+    const orphanStatus = statuses2.find((st) => st.path === cursorFile);
+    expect(orphanStatus?.state).toBe("orphan-drift");
+
+    await apply(ws2, p2, statuses2);
+
+    // Step 5: Lock should STILL be schema 4 because of the kept cursor entry
+    const lockAfter2 = await readLock(s.wsRoot);
+    expect(lockAfter2!.schema).toBe(4);
+    // Targets in resolution are [claude-code], but lock preserves the entry
+    expect(lockAfter2!.targets).toEqual(["claude-code"]);
+    // The cursor entry should still be in the lock files
+    expect(lockAfter2!.files.some((f) => f.path === cursorFile && f.target === "cursor")).toBe(true);
+  });
 });
