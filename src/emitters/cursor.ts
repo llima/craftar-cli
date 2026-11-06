@@ -1,7 +1,7 @@
 import { serializeFrontmatter } from "../core/frontmatter.js";
 import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
-import { envReferences, mcpServers, MCP_FILE, outName, textFile } from "./shared.js";
+import { envReferences, mcpServers, MCP_FILE, outName, ownRuleRefs, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
 
 /**
@@ -15,12 +15,13 @@ export const cursor: Emitter<"cursor"> = {
     const out: PlannedFile[] = [];
     const t = "cursor";
     const mcp: ResolvedIngredient[] = [];
+    const refs = ownRuleRefs(ctx, t);
     for (const ing of ctx.aimed) {
       const m = ctx.meta(ing);
       switch (m.type) {
         case "rule": {
           const path = `.cursor/rules/${outName(m)}.mdc`;
-          const body = await ctx.text(ing, m.file, t);
+          const body = refs.index(refs.resolve(await ctx.text(ing, m.file, t), ing.ref), path);
           // Warn if a fileMatchPattern item holds a comma, which Cursor reads as a separator.
           if (m.inclusion === "fileMatch") {
             const patterns = Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern : [m.fileMatchPattern ?? ""];
@@ -36,7 +37,7 @@ export const cursor: Emitter<"cursor"> = {
         }
         case "agent": {
           const path = `.cursor/agents/${outName(m)}.md`;
-          const body = await ctx.text(ing, m.file, t);
+          const body = refs.resolve(await ctx.text(ing, m.file, t), ing.ref);
           if ((m.tools?.length ?? 0) > 0)
             ctx.warn(`cursor: agent "${outName(m)}": tools have no Cursor field and are dropped`);
           // Never the agent's frontmatterRaw: that is Claude Code's frontmatter.
@@ -53,6 +54,7 @@ export const cursor: Emitter<"cursor"> = {
         }
       }
     }
+    refs.finish();
     if (mcp.length) {
       // mcpServers renders and runs credentialIn first; the reshape after it changes no value it checked.
       const servers = envReferences(mcpServers(ctx, t, MCP_FILE.cursor, mcp));

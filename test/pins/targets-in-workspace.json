@@ -204,7 +204,7 @@
           "output": [
             ".cursor/rules/<name>.mdc"
           ],
-          "note": "written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; the body unchanged; with agents-md among the targets, an always-on rule with the default targets is left to AGENTS.md"
+          "note": "written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; a .claude/rules/ reference in the body names the file a target writes for that rule; with agents-md among the targets, an always-on rule with the default targets is left to AGENTS.md"
         },
         "agent": {
           "state": "converted",

@@ -147,6 +147,17 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: T
   return { rulesByName, steeringsByName, ruleTargets };
 }
 
+/**
+ * Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target that writes rules — cursor or copilot
+ * (spec 61 §10), where K1 generalises to "the file the citing target itself writes".
+ */
+export type RefMode = "agents-md" | "kiro" | "cursor" | "copilot";
+
+/** Whether a target that writes rules in its own file writes this one there (spec 61 §5.2: copilot skips a manual or an auto rule). */
+function ownWrites(mode: "cursor" | "copilot", meta: Ingredient): boolean {
+  return meta.type === "rule" && (mode === "cursor" || meta.inclusion === "always" || meta.inclusion === "fileMatch");
+}
+
 /** Rule reference state (spec 15 §4.2 for agents-md, spec 17 §4.2 for kiro). */
 export type RuleRefState = "A" | "B" | "C" | "D" | "K1" | "K2" | "K3" | "unknown";
 
@@ -159,7 +170,7 @@ export function ruleRefState(
   name: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro",
+  mode: RefMode,
 ): RuleRefState {
   const { rulesByName, steeringsByName, ruleTargets: effective } = lookup;
   const hasCc = targets.includes("claude-code");
@@ -167,6 +178,14 @@ export function ruleRefState(
   const hasMd = targets.includes("agents-md");
   const rule = rulesByName.get(name);
   const ruleTargets = effective.get(name);
+  if (mode === "cursor" || mode === "copilot") {
+    // Spec 61 §10: K1 is the file the citing target writes; then claude-code's, then AGENTS.md, as for kiro (no steering here)
+    if (rule && ruleTargets && targets.includes(mode) && appliesTo(ruleTargets, mode) && ownWrites(mode, rule.meta)) return "K1";
+    if (rule && ruleTargets && hasCc && appliesTo(ruleTargets, "claude-code")) return "K2";
+    if (rule && ruleTargets && hasMd && appliesTo(ruleTargets, "agents-md")) return "K3";
+    if (rule) return "D";
+    return "unknown";
+  }
   if (mode === "kiro") {
     // K1: kiro writes it — a rule or steering that admits kiro (spec 17 §4.2)
     if (rule && ruleTargets && hasKiro && appliesTo(ruleTargets, "kiro")) return "K1";
@@ -213,11 +232,22 @@ export function ruleReference(
   name: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro",
+  mode: RefMode,
 ): RuleReferenceResult {
   const state = ruleRefState(name, lookup, targets, mode);
   const hasCc = targets.includes("claude-code");
   const rule = lookup.rulesByName.get(name);
+  if (mode === "cursor" || mode === "copilot") {
+    switch (state) {
+      case "K1": return { state, text: ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) };
+      case "K2": return { state, text: `.claude/rules/${name}.md` };  // unchanged
+      case "K3": return { state, text: `AGENTS.md (rule: ${name})` };
+      case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
+      case "unknown":
+        if (hasCc) return { state, text: `.claude/rules/${name}.md` };  // unchanged
+        return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: "no such rule" } };
+    }
+  }
   if (mode === "kiro") {
     switch (state) {
       case "K1": return { state, text: ruleFile("kiro", { name }) };
@@ -249,7 +279,7 @@ export function unresolvedRuleRefs(
   text: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro",
+  mode: RefMode,
 ): Array<{ line: number; name: string }> {
   const hasCc = targets.includes("claude-code");
   const result: Array<{ line: number; name: string }> = [];
@@ -301,7 +331,7 @@ export function resolveRuleRefs(
   citing: string,
   lookup: RuleLookup,
   targets: readonly string[],
-  mode: "agents-md" | "kiro" = "agents-md",
+  mode: RefMode = "agents-md",
 ): { text: string; report: RefReport } {
   const report: RefReport = { reworded: [], others: [] };
   const hasCc = targets.includes("claude-code");
@@ -430,8 +460,11 @@ export function resolveRuleRefs(
           continue;
       }
     } else {
-      // agents-md mode (spec 15 §4.3)
-      switch (state) {
+      // agents-md mode (spec 15 §4.3); a new target's own mode reads K1 as B (its own file), K2 as A, K3 as C (spec 61 §10)
+      const own = mode === "cursor" || mode === "copilot";
+      const st: RuleRefState = own ? (({ K1: "B", K2: "A", K3: "C" } as Partial<Record<RuleRefState, RuleRefState>>)[state] ?? state) : state;
+      const bFile = own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
+      switch (st) {
         case "A":
           // State A: link unchanged, but text is now resolved like a token (spec 20 §4.1)
           // The text resolution already happened; we only emit a match if the text changed
@@ -442,7 +475,7 @@ export function resolveRuleRefs(
           }
           break;
         case "B":
-          replacement = `[${resolvedText}](${ruleFile("kiro", { name })}${frag ?? ""})`;
+          replacement = `[${resolvedText}](${bFile}${frag ?? ""})`;
           break;
         case "C":
           replacement = `[${resolvedText}](AGENTS.md)`;
@@ -592,8 +625,44 @@ export function outName(m: { name: string; as?: string }): string {
 }
 
 /** The file a target writes for a rule: the path AGENTS.md lists when that target writes it (spec 14). */
-export function ruleFile(target: "claude-code" | "kiro", m: { name: string; as?: string }): string {
+export function ruleFile(target: "claude-code" | "kiro" | "cursor" | "copilot", m: { name: string; as?: string; inclusion?: string }): string {
+  if (target === "cursor") return `.cursor/rules/${outName(m)}.mdc`;
+  // Copilot joins every always-on rule into one file (spec 61 §5.2)
+  if (target === "copilot") return m.inclusion === "always" ? ".github/copilot-instructions.md" : `.github/instructions/${outName(m)}.instructions.md`;
   return target === "claude-code" ? `.claude/rules/${outName(m)}.md` : `.kiro/steering/${outName(m)}.md`;
+}
+
+/**
+ * The rule references and the rules index of a new target's bodies (spec 61 §10): each body resolved in the target's own mode —
+ * a `.claude/rules/<x>.md` reference names the file the target writes, else claude-code's, else AGENTS.md — then, in a rule body at
+ * the index gate, the index expanded with the target's names. `finish` says, in one warning, the references reworded.
+ */
+export function ownRuleRefs(ctx: EmitBase, target: "cursor" | "copilot"): { resolve(text: string, citing: string): string; index(text: string, path: string): string; finish(): void } {
+  const lookup = buildRuleLookup(ctx.resolution.ingredients, ctx.resolution);
+  const dead: RefReport["reworded"] = [];
+  const seen = new Set<string>();
+  return {
+    resolve(text, citing) {
+      const r = resolveRuleRefs(text, citing, lookup, ctx.resolution.targets, target);
+      for (const e of r.report.reworded) {
+        const k = `${e.ref}|${e.citing}`;
+        if (!seen.has(k)) {
+          seen.add(k);
+          dead.push(e);
+        }
+      }
+      return r.text;
+    },
+    index(text, path) {
+      if (!ctx.resolution.rulesIndex) return text;
+      const r = expandRulesIndex(text, target, lookup, ctx.resolution);
+      if (r.listed > 0 || r.undescribed.length > 0 || r.expanded) ctx.reportIndex({ path, rules: r.listed, undescribed: r.undescribed, expanded: r.expanded });
+      return r.text;
+    },
+    finish() {
+      if (dead.length) ctx.warn(`${target}: ${formatDeadRefs(dead)}`);
+    },
+  };
 }
 
 /** The path to the example settings file generated by claude-code (spec 27 §4.2). */
@@ -907,7 +976,7 @@ function foldDescription(desc: string): string {
  */
 export function expandRulesIndex(
   text: string,
-  target: "claude-code" | "kiro" | "agents-md",
+  target: "claude-code" | "kiro" | "agents-md" | "cursor" | "copilot",
   lookup: RuleLookup,
   resolution: Resolution,
 ): ExpandRulesIndexResult {
@@ -933,7 +1002,7 @@ export function expandRulesIndex(
 
   // Build the index content once (it's the same for all occurrences)
   const rules = resolution.ingredients.filter((ing) => ing.meta.type === "rule");
-  const mode = target === "kiro" ? "kiro" : "agents-md";
+  const mode: RefMode = target === "kiro" || target === "cursor" || target === "copilot" ? target : "agents-md";
 
   // Group rules by inclusion for display order
   const alwaysOn: Array<{ name: string; path: string; desc: string | null }> = [];

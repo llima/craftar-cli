@@ -1,4 +1,4 @@
-import { envReferences, mcpServers, MCP_FILE, outName, textFile } from "./shared.js";
+import { envReferences, mcpServers, MCP_FILE, outName, ownRuleRefs, textFile } from "./shared.js";
 import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import type { Emitter, PlannedFile } from "./types.js";
@@ -15,18 +15,20 @@ export const copilot: Emitter<"copilot"> = {
     const t = "copilot";
     const always: string[] = [];
     const mcp: ResolvedIngredient[] = [];
+    const refs = ownRuleRefs(ctx, t);
     for (const ing of ctx.aimed) {
       const m = ctx.meta(ing);
       switch (m.type) {
         case "rule": {
           if (m.inclusion === "always") {
-            always.push(await ctx.text(ing, m.file, t));
+            always.push(refs.index(refs.resolve(await ctx.text(ing, m.file, t), ing.ref), ".github/copilot-instructions.md"));
           } else if (m.inclusion === "fileMatch") {
             const items = Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern : [m.fileMatchPattern ?? "**"];
             if (items.some((p) => p.includes(","))) ctx.warn(`copilot: rule ${ing.ref}: a glob holds a comma, which Copilot reads as a separator`);
             const fm = `---\napplyTo: ${JSON.stringify(items.join(","))}\n---\n`;
-            const body = await ctx.text(ing, m.file, t);
-            out.push(await textFile(ctx, `.github/instructions/${outName(m)}.instructions.md`, fm + "\n" + body, t, ing.ref, { keepBom: false }));
+            const path = `.github/instructions/${outName(m)}.instructions.md`;
+            const body = refs.index(refs.resolve(await ctx.text(ing, m.file, t), ing.ref), path);
+            out.push(await textFile(ctx, path, fm + "\n" + body, t, ing.ref, { keepBom: false }));
           } else {
             ctx.warn(`copilot: rule ${ing.ref} (${m.inclusion}) has no Copilot equivalent — skipped`);
           }
@@ -38,7 +40,7 @@ export const copilot: Emitter<"copilot"> = {
           if (m.description) lines.push(`description: ${JSON.stringify(m.description)}`);
           if (tools.length) lines.push(`tools: ${JSON.stringify(tools)}`);
           if (m.model) lines.push(`model: ${JSON.stringify(m.model)}`);
-          const doc = `---\n${lines.join("\n")}\n---\n` + (await ctx.text(ing, m.file, t));
+          const doc = `---\n${lines.join("\n")}\n---\n` + refs.resolve(await ctx.text(ing, m.file, t), ing.ref);
           out.push(await textFile(ctx, `.github/agents/${outName(m)}.agent.md`, doc, t, ing.ref, { keepBom: false }));
           break;
         }
@@ -48,7 +50,7 @@ export const copilot: Emitter<"copilot"> = {
           if (m.argumentHint) lines.push(`argument-hint: ${JSON.stringify(m.argumentHint)}`);
           lines.push("agent: agent");
           if (m.allowedTools) ctx.warn(`copilot: command "${outName(m)}": allowed-tools has no prompt-file field; dropped`);
-          const doc = `---\n${lines.join("\n")}\n---\n` + (await ctx.text(ing, m.file, t));
+          const doc = `---\n${lines.join("\n")}\n---\n` + refs.resolve(await ctx.text(ing, m.file, t), ing.ref);
           out.push(await textFile(ctx, `.github/prompts/${outName(m)}.prompt.md`, doc, t, ing.ref, { keepBom: false }));
           break;
         }
@@ -61,6 +63,7 @@ export const copilot: Emitter<"copilot"> = {
         }
       }
     }
+    refs.finish();
     if (always.length) {
       // Every always-on rule, in resolution order, one blank line between bodies; the file belongs to no one rule.
       const text = always.map((b) => b.replace(/\n+$/, "")).join("\n\n") + "\n";
