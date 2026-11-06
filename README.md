@@ -506,7 +506,7 @@ steering = `inclusion` frontmatter + `GENERATED` banner + rule body, with `.clau
 
 **The rules index** (`schema: 7`). Each target writes the list with the references it writes for `.claude/rules/<x>.md` in a body: the `.claude/` and `AGENTS.md` lists name a rule `.claude/rules/<x>.md` when `claude-code` writes it, `.kiro/steering/<x>.md` when only `kiro` does and `AGENTS.md (rule: <x>)` when only `AGENTS.md` holds it; the `.kiro/` list names it `.kiro/steering/<x>.md` when `kiro` writes it (or a steering ingredient of that name), `.claude/rules/<x>.md` when only `claude-code` does and `AGENTS.md (rule: <x>)` when only `AGENTS.md` holds it. A path is in backticks; `AGENTS.md (rule: <x>)` is not. A rule no target of the workspace writes is left out, with no warning — so in a workspace without `agents-md` a rule aimed at `agents-md` alone is not listed. Under `agents-md.primary` an always-on rule with the default `targets` is listed as `AGENTS.md (rule: <x>)` in the other two lists. The `.claude/` and `AGENTS.md` lists are LF, the `.kiro/` list keeps the file's line endings — LF for a new file — as the rest of each file. `craftar explain <path>` names an indexed file's list (`index       craftar.rules.index (<n> rules)`), except for `AGENTS.md`, which is not one ingredient, and `drift promote` refuses a hand edit of one (D21).
 
-Conversion of hooks/subagents to other tools is out of scope here: the plan is to delegate that to [rulesync](https://github.com/dyoshikawa/rulesync) rather than reimplement it.
+craftar writes each tool's files itself, with an emitter per target, rather than delegating the conversion to [rulesync](https://github.com/dyoshikawa/rulesync), which stays a reference for the formats; hooks for `cursor` and `copilot` come in a later release.
 
 ## MCP servers on Windows and Linux
 
@@ -771,7 +771,7 @@ Phase 1 — client profile (done). Shipped: the read-only catalogue (`recipes`, 
 
 Phase 2 — environment (done). Shipped: local services (`service` ingredients, `.craftar/`, `craftar services up | down | status`); `craftar templates list | install` (`dotnet new` project templates declared in a profile); `craftar docs validate` (links, leaked tool-call tags and encoding always, and a profile's declared `docs:` taxonomy).
 
-Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packaging of `craftar mcp`.
+Later: targets for Codex and Antigravity, then hooks for the new targets and a Gemini target; the Agent Plugin packaging of `craftar mcp`.
 
 ## Compatibility
 

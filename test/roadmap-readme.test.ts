@@ -25,7 +25,7 @@ describe("README — the roadmap with phases 1 and 2 closed", () => {
 
   it("Later is unchanged", () => {
     const later = lines.filter((l) => l.startsWith("Later:"));
-    expect(later).toEqual(["Later: rulesync bridge for Codex/Kimi/Cursor specifics; the Agent Plugin packaging of `craftar mcp`."]);
+    expect(later).toEqual(["Later: targets for Codex and Antigravity, then hooks for the new targets and a Gemini target; the Agent Plugin packaging of `craftar mcp`."]);
   });
 
   // Since 1.0.0 the status line is a short paragraph (the user's ruling of 2026-11-06); the old status line test is removed.
