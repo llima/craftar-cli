@@ -15,16 +15,17 @@ import { emitFor, plan, loadWorkspace } from "../src/core/sync.js";
 import { toLf, stripBom } from "../src/core/text.js";
 import { mcpServers } from "../src/emitters/shared.js";
 import { profile, recipe, scenario, tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
-import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
+import { INGREDIENT_TYPES, LEGACY_TARGETS, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
 import type { EmitBase, Emitter, PlannedFile } from "../src/emitters/types.js";
 
 /**
  * Creates a Forge with one ingredient per type (two skills: dir and file layout), each with
  * `targets: "*"` and a unique output name, and every body referencing `.claude/rules/cite-me.md`.
+ * @param schema The Forge schema version to use (1 for legacy targets, 15 for cursor)
  */
-async function makeCapabilityForge(root: string): Promise<void> {
-  // Create the forge manifest - use schema 15 to allow cursor target
-  await writeFiles(root, { "craftar.forge.yaml": YAML.stringify({ name: "capability-forge", schema: 15 }) });
+async function makeCapabilityForge(root: string, schema: number): Promise<void> {
+  // Create the forge manifest with the specified schema
+  await writeFiles(root, { "craftar.forge.yaml": YAML.stringify({ name: "capability-forge", schema }) });
 
   const REFERENCE = ".claude/rules/cite-me.md";
 
@@ -98,8 +99,9 @@ async function makeCapabilityForge(root: string): Promise<void> {
   const allRefs = ingredients.map((ing) => `${ing.meta.type}/${ing.meta.name}`);
   await writeFiles(root, { "recipes/all.yaml": YAML.stringify({ name: "all", ingredients: allRefs }) });
 
-  // Create a profile
-  await writeFiles(root, { "profiles/test/profile.yaml": YAML.stringify({ name: "test", recipes: ["all"], targets: TARGETS.slice() }) });
+  // Create a profile - use LEGACY_TARGETS for schema < 15, TARGETS for schema >= 15
+  const profileTargets = schema < 15 ? LEGACY_TARGETS.slice() : TARGETS.slice();
+  await writeFiles(root, { "profiles/test/profile.yaml": YAML.stringify({ name: "test", recipes: ["all"], targets: profileTargets }) });
 }
 
 /**
@@ -256,18 +258,24 @@ async function isAsHeld(
 
 describe("capability matrix against emitters (spec 16 §10.2)", () => {
   let root: string;
-  let forgeRoot: string;
+  let legacyForgeRoot: string;
+  let cursorForgeRoot: string;
 
-  // Set up the shared Forge once
+  // Set up the shared Forges once - schema 1 for legacy, schema 15 for cursor
   beforeAll(async () => {
     root = await tmpDir("craftar-capabilities-");
-    forgeRoot = path.join(root, "forge");
-    await makeCapabilityForge(forgeRoot);
+    legacyForgeRoot = path.join(root, "forge-legacy");
+    cursorForgeRoot = path.join(root, "forge-cursor");
+    await makeCapabilityForge(legacyForgeRoot, 1);
+    await makeCapabilityForge(cursorForgeRoot, 15);
   });
 
   afterAll(async () => {
     if (root) await fs.rm(root, { recursive: true, force: true });
   });
+
+  // Helper to get the right forge root based on target
+  const isLegacyTarget = (t: Target) => t === "claude-code" || t === "kiro" || t === "agents-md";
 
   // Test each target
   for (const target of TARGETS) {
@@ -278,6 +286,7 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
       let forge: Awaited<ReturnType<typeof loadForge>>;
 
       beforeAll(async () => {
+        const forgeRoot = isLegacyTarget(target) ? legacyForgeRoot : cursorForgeRoot;
         wsRoot = await createWorkspace(root, forgeRoot, [target]);
         const ws = await loadWorkspace(wsRoot);
         forge = ws.forge;
