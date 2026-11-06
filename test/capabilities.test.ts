@@ -495,7 +495,7 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
     );
   });
 
-  it("no note of the 36 cells holds a backtick; native notes are null (except hook); unsupported notes are non-empty", () => {
+  it("no note holds a backtick; native notes are null (except hook); unsupported notes follow the allow-list", () => {
     const bad: string[] = [];
     for (const t of TARGETS)
       for (const ty of INGREDIENT_TYPES) {
@@ -503,8 +503,14 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
         if (c.note !== null && c.note.includes("`")) bad.push(`${t} · ${ty}`);
         // Native cells have null notes, except hook which has a note about registration (spec 43 §5.5)
         if (c.state === "native" && c.note !== null && !(t === "claude-code" && ty === "hook")) bad.push(`${t} · ${ty} (native with a note)`);
-        // Unsupported cells must have a non-null, non-empty note (either the standard one or a custom explanation)
-        if (c.state === "unsupported" && (c.note === null || c.note.length === 0)) bad.push(`${t} · ${ty} (unsupported without note)`);
+        // Unsupported cells must have a note from the allow-list
+        if (c.state === "unsupported") {
+          const isAllowed =
+            c.note === "skipped with a warning when aimed at this target" ||
+            c.note?.startsWith("through agent-skills: ") ||
+            c.note?.startsWith("not written yet: ");
+          if (!isAllowed) bad.push(`${t} · ${ty} (unsupported note not in allow-list: ${c.note})`);
+        }
       }
     expect(bad).toEqual([]);
   });
