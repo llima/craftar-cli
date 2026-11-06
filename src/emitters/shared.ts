@@ -149,12 +149,9 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: T
   return { rulesByName, steeringsByName, ruleTargets };
 }
 
-/**
- * Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target's own mode — cursor, copilot, codex or
- * antigravity (spec 61 §10), where K1 generalises to "the file the citing target itself writes" (codex writes none).
- */
-/** The new targets' own modes (spec 61 §10): K1 is the file the citing target itself writes, then claude-code's, then AGENTS.md. */
+/** The new targets' own modes (spec 61 §10): K1 is the file the citing target itself writes (codex writes none), then claude-code's, then AGENTS.md. */
 export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity";
+/** Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target's own mode (spec 61 §10). */
 export type RefMode = "agents-md" | "kiro" | OwnMode;
 
 /** Whether a reference mode is a new target's own mode. */
