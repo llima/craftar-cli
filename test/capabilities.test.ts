@@ -15,7 +15,7 @@ import { emitFor, plan, loadWorkspace } from "../src/core/sync.js";
 import { toLf, stripBom } from "../src/core/text.js";
 import { mcpServers } from "../src/emitters/shared.js";
 import { profile, recipe, scenario, tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
-import { INGREDIENT_TYPES, LEGACY_TARGETS, TARGETS, type IngredientType, type Target } from "../src/schema/index.js";
+import { INGREDIENT_TYPES, LEGACY_TARGETS, TARGETS, isLegacyTarget, type IngredientType, type Target } from "../src/schema/index.js";
 import type { EmitBase, Emitter, PlannedFile } from "../src/emitters/types.js";
 
 /**
@@ -292,9 +292,6 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
   afterAll(async () => {
     if (root) await fs.rm(root, { recursive: true, force: true });
   });
-
-  // Helper to get the right forge root based on target
-  const isLegacyTarget = (t: Target) => t === "claude-code" || t === "kiro" || t === "agents-md";
 
   // Test each target
   for (const target of TARGETS) {
