@@ -177,7 +177,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const j = json(runCli(["targets", "--json"], { cwd: dir }));
     expect(keys(j)).toEqual(["ingredientTypes", "targets", "warnings"]);
     expect(j.ingredientTypes).toEqual(["rule", "agent", "command", "skill", "mcp", "script", "steering", "hook", "service"]);
-    expect(j.targets.map((t: { name: string }) => t.name)).toEqual(["claude-code", "kiro", "agents-md", "cursor"]);
+    expect(j.targets.map((t: { name: string }) => t.name)).toEqual(["claude-code", "kiro", "agents-md", "cursor", "copilot"]);
     let cells = 0;
     for (const t of j.targets) {
       expect(keys(t)).toEqual(["capabilities", "inUse", "name"]);
@@ -187,7 +187,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
         cells++;
       }
     }
-    expect(cells).toBe(36);
+    expect(cells).toBe(45);
     expect(j.targets[1].capabilities.rule).toEqual({
       state: "converted",
       output: [".kiro/steering/<name>.md"],
@@ -265,17 +265,17 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const s = await cat();
     for (const cwd of [await bare(), s.forgeRoot]) {
       const j = json(runCli(["targets", "--json"], { cwd }));
-      expect(j.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null, null]);
+      expect(j.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null, null, null]);
       expect(j.warnings).toEqual([]);
     }
   });
 
   it("targets: in a workspace the resolved targets are true, the rest false; a profile with no targets is all false", async () => {
     const s = await cat();
-    expect(json(runCli(["targets", "--json"], { cwd: s.wsRoot })).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, true, false, false]);
-    expect(json(runCli(["targets", "--json", "--workspace", s.wsRoot])).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, true, false, false]);
+    expect(json(runCli(["targets", "--json"], { cwd: s.wsRoot })).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, true, false, false, false]);
+    expect(json(runCli(["targets", "--json", "--workspace", s.wsRoot])).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([true, true, false, false, false]);
     const none = await cat({ profile: "acme", targets: [] });
-    expect(json(runCli(["targets", "--json", "--workspace", none.wsRoot])).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([false, false, false, false]);
+    expect(json(runCli(["targets", "--json", "--workspace", none.wsRoot])).targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([false, false, false, false, false]);
   });
 
   it("targets: --workspace on a dir without craftar.yaml exits 1; --forge is an unknown option", async () => {
@@ -295,7 +295,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const gone = await cat();
     await fs.rm(gone.forgeRoot, { recursive: true, force: true });
     const j1 = json(runCli(["targets", "--json", "--workspace", gone.wsRoot]));
-    expect(j1.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null, null]);
+    expect(j1.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null, null, null]);
     expect(j1.warnings).toEqual([
       `targets in use not shown: Forge not found at ${gone.forgeRoot}`,
     ]);
@@ -360,24 +360,24 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(gl.find((l) => l.includes("rule/gone"))).toMatch(/^  ✗ rule\/gone\s+not in this Forge$/);
   });
 
-  it("text mode: targets header, matrix, legend and one paths line per writing cell (17) plus services", async () => {
+  it("text mode: targets header, matrix, legend and one paths line per writing cell (21) plus services", async () => {
     const s = await cat();
     const r = runCli(["targets"], { cwd: s.wsRoot });
     expect(r.code).toBe(0);
     const norm = r.stdout.trimEnd().split("\n").map((l) => l.trim().replace(/ {2,}/g, " "));
-    expect(norm[0]).toBe("craftar targets — claude-code (in use) · kiro (in use) · agents-md · cursor");
-    const at = norm.indexOf("claude-code kiro agents-md cursor");
+    expect(norm[0]).toBe("craftar targets — claude-code (in use) · kiro (in use) · agents-md · cursor · copilot");
+    const at = norm.indexOf("claude-code kiro agents-md cursor copilot");
     expect(at).toBeGreaterThan(0);
     expect(norm.slice(at + 1, at + 10)).toEqual([
-      "rule native converted converted converted",
-      "agent native converted unsupported converted",
-      "command native converted unsupported unsupported",
-      "skill native converted unsupported unsupported",
-      "mcp native native unsupported converted",
-      "script native unsupported unsupported unsupported",
-      "steering unsupported native unsupported unsupported",
-      "hook native unsupported unsupported unsupported",
-      "service unsupported unsupported unsupported unsupported",
+      "rule native converted converted converted converted",
+      "agent native converted unsupported converted converted",
+      "command native converted unsupported unsupported converted",
+      "skill native converted unsupported unsupported unsupported",
+      "mcp native native unsupported converted converted",
+      "script native unsupported unsupported unsupported unsupported",
+      "steering unsupported native unsupported unsupported unsupported",
+      "hook native unsupported unsupported unsupported unsupported",
+      "service unsupported unsupported unsupported unsupported unsupported",
     ]);
     expect(norm).toContain("native written in the tool's own place for that type, as the Forge holds it");
     expect(norm).toContain("converted written in another form — see its line below");
@@ -388,16 +388,20 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "kiro · rule .kiro/steering/<name>.md — inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
       "agents-md · rule AGENTS.md — always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
       "cursor · rule .cursor/rules/<name>.mdc — written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; the body unchanged",
+      "copilot · rule .github/instructions/<name>.instructions.md — written as .instructions.md in .github/instructions/; applyTo from fileMatchPattern (list or string), description from description field when present",
       "claude-code · agent .claude/agents/<name>.md",
       "kiro · agent .kiro/agents/<name>.json — written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
       "cursor · agent .cursor/agents/<name>.md — name, description and model kept; tools have no Cursor field and are dropped with a warning",
+      "copilot · agent .github/agents/<name>.md — name and description kept; tools have no Copilot field and are dropped with a warning",
       "claude-code · command .claude/commands/<name>.md",
       "kiro · command .kiro/steering/commands/<name>.md — written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
+      "copilot · command .github/prompts/<name>.prompt.md — written as .prompt.md in .github/prompts/; description as YAML frontmatter when present, body unchanged",
       "claude-code · skill .claude/skills/<name>/<file>, .claude/skills/<name>.md",
       "kiro · skill .kiro/skills/<name>/<file> — in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md",
       "claude-code · mcp .mcp.json, .claude/settings.craftar.example.json",
       "kiro · mcp .kiro/settings/mcp.json",
       "cursor · mcp .cursor/mcp.json — the servers under mcpServers; a ${NAME} reference becomes ${env:NAME}",
+      "copilot · mcp .vscode/mcp.json — the servers under servers; each has type: stdio and the server's command, args, env",
       "claude-code · script .claude/scripts/<file>",
       "kiro · steering .kiro/steering/<name>.md",
       "claude-code · hook .claude/hooks/<file>, .claude/settings.craftar.example.json — the registration is written to .claude/settings.craftar.example.json, to copy",
@@ -405,7 +409,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     // Services are not a target; they get their own line after the paths block (spec 31 §4.7)
     expect(norm[norm.length - 1]).toBe("service: written by sync under .craftar/ for no target; see craftar services");
     const bareRun = runCli(["targets"], { cwd: await bare() });
-    expect(bareRun.stdout.split("\n")[0]).toBe("craftar targets — claude-code · kiro · agents-md · cursor");
+    expect(bareRun.stdout.split("\n")[0]).toBe("craftar targets — claude-code · kiro · agents-md · cursor · copilot");
   });
 
   it("the header carries the first 8 characters of the Forge commit, --json the full SHA", async () => {
@@ -500,7 +504,7 @@ describe("cli — targets reads the workspace once craftar.yaml is there (spec 1
     expect(r.code).toBe(0);
     expect(r.stderr).toBe("");
     const j = JSON.parse(r.stdout);
-    expect(j.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null, null]);
+    expect(j.targets.map((t: { inUse: unknown }) => t.inUse)).toEqual([null, null, null, null, null]);
     expect(j.warnings).toHaveLength(1);
     expect(j.warnings[0].startsWith("targets in use not shown: ")).toBe(true);
   });

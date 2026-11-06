@@ -245,6 +245,23 @@ async function isAsHeld(
     return false;
   }
 
+  // For copilot rules/agents/commands, the emitter adds frontmatter when description/applyTo are present, and
+  // the file extension changes (.instructions.md, .prompt.md). Compare full content to confirm conversion.
+  if ((type === "rule" || type === "agent" || type === "command") && f.target === "copilot") {
+    for (const srcFile of sourceFiles) {
+      try {
+        const srcPath = path.join(ing.dir, srcFile);
+        const srcContent = toLf(stripBom((await fs.readFile(srcPath)).toString("utf8"))).replace(/\n+$/, "").trim();
+        const dstContent = toLf(stripBom(f.content.toString("utf8"))).replace(/\n+$/, "").trim();
+        // Compare full content (including frontmatter) — copilot adds frontmatter, so they won't match
+        if (srcContent === dstContent) return true;
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
   // For skill with dir layout, check the specific file in the planned path
   if (type === "skill" && (meta.layout as string) === "dir") {
     // Get the filename from the planned path
