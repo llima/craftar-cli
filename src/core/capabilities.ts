@@ -302,8 +302,8 @@ void writtenIs;
 
 /**
  * How a target words the warning for a type it does not write, and the "through X" cells (spec 61 §6.1): a type another
- * target writes into a file this tool reads is warned only when that carrier is not among the workspace's targets. Not part of
- * `targets --json`.
+ * target writes into a file this tool reads is warned unless that carrier is among the workspace's targets and the ingredient
+ * is aimed at it. Not part of `targets --json`.
  */
 const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Target>> }> = {
   "claude-code": { label: "Claude Code", per: "ingredient" },
@@ -333,10 +333,11 @@ export function written<T extends Target>(
   matrix: Record<Target, Record<IngredientType, Capability>> = CAPABILITIES,
 ): Walk<T> {
   const { label, per, carriers } = SKIP_WARNING[target];
-  // A "through X" cell with its carrier among the targets: the content reaches the tool in X's file — nothing to say.
-  const carried = (type: IngredientType) => {
-    const c = carriers?.[type];
-    return c !== undefined && resolution.targets.includes(c);
+  // A "through X" cell whose carrier is among the targets and writes this ingredient (it is aimed there): the content
+  // reaches the tool in X's file — nothing to say. An ingredient whose `targets` leave the carrier out is warned.
+  const carried = (ing: ResolvedIngredient) => {
+    const c = carriers?.[ing.meta.type];
+    return c !== undefined && resolution.targets.includes(c) && appliesTo(effectiveTargets(ing.meta, resolution), c);
   };
   let started = false;
   let finished = false;
@@ -345,7 +346,7 @@ export function written<T extends Target>(
     const skips = (ing: ResolvedIngredient) => matrix[target][ing.meta.type].state === "unsupported";
     if (per === "type") {
       const byType = new Map<string, string[]>();
-      for (const ing of aimed) if (skips(ing) && !carried(ing.meta.type)) byType.set(ing.meta.type, [...(byType.get(ing.meta.type) ?? []), ing.ref]);
+      for (const ing of aimed) if (skips(ing) && !carried(ing)) byType.set(ing.meta.type, [...(byType.get(ing.meta.type) ?? []), ing.ref]);
       for (const [type, refs] of byType)
         warn(`${target}: ${refs.length} ${type} ingredient(s) have no ${label} equivalent — skipped: ${refs.join(", ")}`);
     }
@@ -354,7 +355,7 @@ export function written<T extends Target>(
         // The one narrowing cast: the matrix said this target writes the type (with a test table the
         // static type and what is yielded can disagree — in that test only).
         yield ing as WrittenIngredient<T>;
-      } else if (per === "ingredient" && !carried(ing.meta.type)) {
+      } else if (per === "ingredient" && !carried(ing)) {
         warn(`${target}: ${ing.meta.type} ${ing.ref} has no ${label} equivalent — skipped`);
       }
     }

@@ -88,7 +88,7 @@ describe("spec 61 §9 — commands left to .agents/skills/", () => {
   });
 });
 
-describe("spec 61 §6.1 — the \"through X\" cells warn only without their carrier", () => {
+describe("spec 61 §6.1 — the \"through X\" cells warn unless their carrier writes the ingredient", () => {
   it("[cursor, copilot]: the skill and cursor's commands are warned", async () => {
     const p = await planOf(await ws(["cursor", "copilot"]));
     expect(p.warnings).toContain("cursor: 1 command ingredient(s) have no Cursor equivalent — skipped: command/review");
@@ -99,6 +99,18 @@ describe("spec 61 §6.1 — the \"through X\" cells warn only without their carr
   it("[cursor, copilot, agent-skills]: nothing is said for them", async () => {
     const p = await planOf(await ws(["cursor", "copilot", "agent-skills"]));
     expect(p.warnings.filter((w) => /^(cursor|copilot): .* (command|skill) ingredient\(s\)/.test(w))).toEqual([]);
+  });
+
+  it("[claude-code, cursor, copilot, agent-skills]: an ingredient whose targets leave agent-skills out is still warned", async () => {
+    const ingredients: IngredientSpec[] = [
+      { meta: { type: "command", name: "deploy", description: "Deploy", targets: ["claude-code", "cursor"] }, files: { "command.md": "Deploy.\n" } },
+      { meta: { type: "skill", name: "lint", layout: "dir", targets: ["cursor", "copilot"] }, files: { "SKILL.md": "---\nname: lint\ndescription: Lint\n---\nLint.\n" } },
+    ];
+    const p = await planOf(await ws(["claude-code", "cursor", "copilot", "agent-skills"], { ingredients }));
+    expect(paths(p).filter((x) => x.startsWith(".agents/skills/"))).toEqual([]);
+    expect(p.warnings).toContain("cursor: 1 command ingredient(s) have no Cursor equivalent — skipped: command/deploy");
+    expect(p.warnings).toContain("cursor: 1 skill ingredient(s) have no Cursor equivalent — skipped: skill/lint");
+    expect(p.warnings).toContain("copilot: 1 skill ingredient(s) have no Copilot equivalent — skipped: skill/lint");
   });
 });
 
