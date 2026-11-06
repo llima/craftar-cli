@@ -469,19 +469,19 @@ Sections layer the same way, weakest → strongest: the body's default → the p
 
 `craftar targets` prints this matrix from `src/core/capabilities.ts`; a test plans one ingredient of every type for each target and fails when a cell and its emitter disagree. **native** — written in the tool's own place for that type, as the Forge holds it (for `mcp`, judged on the server file); **converted** — written in another form (frontmatter or a banner added, references rewritten, another container format, or folded into a shared file); **unsupported** — not written: `sync` warns and names an ingredient aimed at that target.
 
-| type | `claude-code` | `kiro` | `agents-md` | `cursor` | `copilot` |
-|---|---|---|---|---|---|
-| `rule` | native | converted | converted | converted | converted |
-| `agent` | native | converted | unsupported | converted | converted |
-| `command` | native | converted | unsupported | unsupported | converted |
-| `skill` | native | converted | unsupported | unsupported | unsupported |
-| `mcp` | native | native | unsupported | converted | converted |
-| `script` | native | unsupported | unsupported | unsupported | unsupported |
-| `steering` | unsupported | native | unsupported | unsupported | unsupported |
-| `hook` | native | unsupported | unsupported | unsupported | unsupported |
-| `service` | unsupported | unsupported | unsupported | unsupported | unsupported |
+| type | `claude-code` | `kiro` | `agents-md` | `cursor` | `copilot` | `agent-skills` |
+|---|---|---|---|---|---|---|
+| `rule` | native | converted | converted | converted | converted | unsupported |
+| `agent` | native | converted | unsupported | converted | converted | unsupported |
+| `command` | native | converted | unsupported | unsupported | converted | converted |
+| `skill` | native | converted | unsupported | unsupported | unsupported | converted |
+| `mcp` | native | native | unsupported | converted | converted | unsupported |
+| `script` | native | unsupported | unsupported | unsupported | unsupported | unsupported |
+| `steering` | unsupported | native | unsupported | unsupported | unsupported | unsupported |
+| `hook` | native | unsupported | unsupported | unsupported | unsupported | unsupported |
+| `service` | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
 
-**service** — unsupported in all five: a service is aimed at no AI coder (its `targets` defaults to `[]`, and an explicit one is skipped with the usual warning). `sync` writes it under `.craftar/` for no target — see *Local services*.
+**service** — unsupported in all six: a service is aimed at no AI coder (its `targets` defaults to `[]`, and an explicit one is skipped with the usual warning). `sync` writes it under `.craftar/` for no target — see *Local services*.
 
 **claude-code** — emits `.claude/rules|agents|commands|skills|scripts|hooks` and `.mcp.json` from the Forge (frontmatter kept byte-for-byte). Each MCP server is written exactly as the Forge holds it, undeclared keys included, in its own key order — in a schema 4 Forge with the params its ingredient declares rendered into its string values (*Server params*). When a written MCP ingredient declares `authEnv` or a written hook declares `registration`, sync also writes `.claude/settings.craftar.example.json` — `env` with each declared name and an empty value, `hooks` with each registration to copy — for the developer to copy into their own, untracked `.claude/settings.json`; a hand-maintained `.claude/settings.example.json` is never touched; `kiro` and `agents-md` write no counterpart. Existing files keep their line endings and BOM; new files are LF without a BOM. Steering is Kiro-only (its `targets` default to `[kiro]`); one aimed at `claude-code` explicitly (`targets: "*"` or a list naming it) is skipped with a warning.
 
@@ -501,6 +501,8 @@ steering = `inclusion` frontmatter + `GENERATED` banner + rule body, with `.clau
 **cursor** — writes a rule to `.cursor/rules/<name>.mdc` with Cursor's frontmatter: `alwaysApply: true` for an always-on rule, `globs` (the rule's `fileMatchPattern`, joined with commas — a glob that holds a comma is warned) for a scoped one, and the rule's `description` when it has one; the body is unchanged. An agent goes to `.cursor/agents/<name>.md` with `name`, `description` and `model`; its `tools` have no Cursor field and are dropped with a warning. MCP servers go to `.cursor/mcp.json` under `mcpServers`, each server as rendered, with `${NAME}` written as `${env:NAME}` (Cursor's own `${workspaceFolder}`, `${workspaceFolderBasename}`, `${userHome}` and `${pathSeparator}` are kept). Commands and skills reach Cursor through the `agent-skills` target, which writes `.agents/skills/`; hooks are not written yet.
 
 **copilot** — writes a scoped rule to `.github/instructions/<name>.instructions.md` with `applyTo` (the rule's `fileMatchPattern`, joined with commas) and every always-on rule, in order, into `.github/copilot-instructions.md`; a manual or an auto rule has no Copilot equivalent and is skipped with a warning. VS Code's Copilot also reads `.claude/rules/`, so with `claude-code` among the targets it loads a scoped rule from both places. An agent goes to `.github/agents/<name>.agent.md` with `name`, `description`, `model` and its `tools` mapped to Copilot's aliases (`read`, `edit`, `search`, `execute`, `web`, `agent`, `todo`); a tool with no alias is dropped with a warning. A command goes to `.github/prompts/<name>.prompt.md` with `description`, `argument-hint` and `agent: agent`. MCP servers go to `.vscode/mcp.json` under `servers`, each server as rendered, with `${NAME}` written as `${env:NAME}`; the Copilot CLI reads the `.mcp.json` that `claude-code` writes. Skills reach Copilot through the `agent-skills` target; hooks are not written yet.
+
+**agent-skills** — writes the standard skills folder, `.agents/skills/<name>/`, which Cursor, Copilot, Codex, Antigravity and other tools read. A skill is copied there, its text files rendered and every other file copied as bytes; a single-file skill is written in folder form, as `<name>/SKILL.md`. A command is written there too, as a skill only a person invokes: `.agents/skills/<name>/SKILL.md` with `name`, `description`, `argument-hint` and `disable-model-invocation: true`; its `allowed-tools` is dropped with a warning. A command and a skill with one name would write one folder, so they fail the plan. Rules, agents, MCP servers and the other types are skipped with a warning.
 
 **The rules index** (`schema: 7`). Each target writes the list with the references it writes for `.claude/rules/<x>.md` in a body: the `.claude/` and `AGENTS.md` lists name a rule `.claude/rules/<x>.md` when `claude-code` writes it, `.kiro/steering/<x>.md` when only `kiro` does and `AGENTS.md (rule: <x>)` when only `AGENTS.md` holds it; the `.kiro/` list names it `.kiro/steering/<x>.md` when `kiro` writes it (or a steering ingredient of that name), `.claude/rules/<x>.md` when only `claude-code` does and `AGENTS.md (rule: <x>)` when only `AGENTS.md` holds it. A path is in backticks; `AGENTS.md (rule: <x>)` is not. A rule no target of the workspace writes is left out, with no warning — so in a workspace without `agents-md` a rule aimed at `agents-md` alone is not listed. Under `agents-md.primary` an always-on rule with the default `targets` is listed as `AGENTS.md (rule: <x>)` in the other two lists. The `.claude/` and `AGENTS.md` lists are LF, the `.kiro/` list keeps the file's line endings — LF for a new file — as the rest of each file. `craftar explain <path>` names an indexed file's list (`index       craftar.rules.index (<n> rules)`), except for `AGENTS.md`, which is not one ingredient, and `drift promote` refuses a hand edit of one (D21).
 
@@ -777,7 +779,7 @@ From 1.0.0, craftar follows [semantic versioning](https://semver.org/). A change
 
 1. **Commands, flags and exit codes**, as *Commands* states them.
 2. **The tooling contracts**: every output this README calls a tooling contract — the `--json` shapes, and the names, arguments and results of the `craftar mcp` tools. Adding a key, a check `id`, a command or a flag is a minor.
-3. **Forges**: a Forge whose `craftar.forge.yaml` declares `schema:` 1 to 14 keeps loading. A new schema level is a minor: it is opt-in, and every older craftar refuses a Forge that declares it.
+3. **Forges**: a Forge whose `craftar.forge.yaml` declares `schema:` 1 to 15 keeps loading. A new schema level is a minor: it is opt-in, and every older craftar refuses a Forge that declares it.
 4. **`craftar.lock` and the registry**: a lock at schema 1, 2, 3 or 4 and the per-machine registry (`$CRAFTAR_HOME/registry.json`) stay readable.
 
 Not covered — these may change in a minor or a patch: human-readable output and its wording, warnings, the routes of `craftar ui` (its `--port`, the refusals before it starts serving and its exit codes are covered), and the text of `--help`. Each exit code keeps its meaning, but a new or changed warning or check can change what a run exits with under `--strict` for the same workspace.
@@ -808,6 +810,7 @@ Not covered — these may change in a minor or a patch: human-readable output an
 
 - A new target, `cursor`: rules to `.cursor/rules/<name>.mdc`, agents to `.cursor/agents/<name>.md`, MCP servers to `.cursor/mcp.json`; commands and skills reach Cursor through the `agent-skills` target, hooks not yet.
 - A new target, `copilot`: scoped rules to `.github/instructions/<name>.instructions.md` (`applyTo`), every always-on rule joined into `.github/copilot-instructions.md`, agents to `.github/agents/<name>.agent.md` (tools mapped to Copilot's aliases), commands to `.github/prompts/<name>.prompt.md`, MCP servers to `.vscode/mcp.json` (`servers`); a manual or an auto rule has no Copilot equivalent and is skipped with a warning; skills reach Copilot through the `agent-skills` target, hooks not yet; with `claude-code` also on, VS Code loads a scoped rule twice (it reads `.claude/rules/` too).
+- A new target, `agent-skills`: the standard `.agents/skills/` folder read by Cursor, Copilot, Codex, Antigravity and others — skills copied there (a single-file skill in folder form), and commands written as skills only a person invokes (`disable-model-invocation: true`); a command and a skill with one name fail the plan.
 - A Forge file that names a new target in `targets` (an ingredient, a profile, a section's `targets=`) needs `schema: 15`; a workspace may name it in `craftar.yaml` at any Forge schema.
 - `craftar.lock` is written at schema 4 when it names a new target; every craftar before 1.1.0 refuses that lock and a `craftar.yaml` naming a new target.
 - A workspace that names no new target sees no change: no byte, lock, warning or exit code.
