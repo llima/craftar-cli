@@ -41,11 +41,16 @@ const CARRIED: ReadonlyArray<{ carrier: Target; writtenTo: string; skippers: rea
  * The file a skipping target would have written for `meta` (spec 61 §6.1, §9): what `explain` and the orphan reason name when a
  * carried skip left it to the carrier. Copilot's always-on rules share one aggregate, so that path is the aggregate's.
  */
-export function carriedPath(target: string, meta: Ingredient): string | null {
-  if (target === "cursor" && meta.type === "rule") return `.cursor/rules/${outName(meta)}.mdc`;
-  if (target === "copilot" && meta.type === "rule") return ".github/copilot-instructions.md";
-  if (target === "copilot" && meta.type === "command") return `.github/prompts/${outName(meta)}.prompt.md`;
+export function carriedPath(target: string, meta: Ingredient, ref: string): { path: string; ingredient: string } | null {
+  if (target === "cursor" && meta.type === "rule") return { path: `.cursor/rules/${outName(meta)}.mdc`, ingredient: ref };
+  if (target === "copilot" && meta.type === "rule") return { path: ".github/copilot-instructions.md", ingredient: "rule/*" };
+  if (target === "copilot" && meta.type === "command") return { path: `.github/prompts/${outName(meta)}.prompt.md`, ingredient: ref };
   return null;
+}
+
+/** The carrier's file that holds `meta` (spec 61 §6.1, §9, criterion 9): what `explain` names as `writtenTo`. */
+export function carrierFile(carrier: string, meta: Ingredient): string {
+  return carrier === ".agents/skills/" ? `.agents/skills/${outName(meta)}/SKILL.md` : carrier;
 }
 
 /** The carrier file that holds `meta` for `target` in this workspace (spec 61 §6.1, §9), or null when no skip applies. */

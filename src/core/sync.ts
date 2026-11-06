@@ -29,7 +29,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { decodeForScan } from "./secrets.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
-import { appliesTo, carriedPath, carriedTo, effectiveTargets } from "../emitters/shared.js";
+import { appliesTo, carriedPath, carriedTo, carrierFile, effectiveTargets } from "../emitters/shared.js";
 import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
 import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
@@ -379,7 +379,7 @@ export interface Plan {
    * Files a skipping target does not write because a carried skip left their content to the carrier's file (spec 61 §6.1, §9),
    * sorted by path: what `explain` answers for such a path and what the orphan reason names. [] for a workspace with no new target.
    */
-  carried: Array<{ path: string; ingredient: string; writtenTo: string }>;
+  carried: Array<{ path: string; ingredient: string; writtenTo: string; carrier: string }>;
   /**
    * Kiro agent resources check (spec 41 §4.5–§4.6): null when the mode is off; otherwise holds
    * the hand-written entries that name files the plan does not write.
@@ -1068,14 +1068,17 @@ export async function plan(ws: Workspace): Promise<Plan> {
 /** Plan.carried (spec 61 §6.1, §9): for each target the workspace names, the files a carried skip kept it from writing. */
 function carriedFiles(resolution: Resolution, planned: readonly PlannedFile[]): Plan["carried"] {
   const plannedPaths = new Set(planned.map((f) => f.path));
-  const byPath = new Map<string, { path: string; ingredient: string; writtenTo: string }>();
+  const byPath = new Map<string, Plan["carried"][number]>();
   for (const ing of resolution.ingredients) {
     for (const t of resolution.targets) {
-      const writtenTo = carriedTo(ing.meta, t, resolution);
-      if (writtenTo === null || !appliesTo(ing.meta.targets, t)) continue;
-      const path = carriedPath(t, ing.meta);
-      if (path === null || plannedPaths.has(path) || byPath.has(path)) continue;
-      byPath.set(path, { path, ingredient: path === ".github/copilot-instructions.md" ? "rule/*" : ing.ref, writtenTo });
+      // carriedTo already requires the default targets, so the ingredient is aimed at t
+      const carrier = carriedTo(ing.meta, t, resolution);
+      if (carrier === null) continue;
+      const at = carriedPath(t, ing.meta, ing.ref);
+      if (at === null || plannedPaths.has(at.path) || byPath.has(at.path)) continue;
+      // An aggregate (several rules) is held by the carrier as a whole: AGENTS.md
+      const writtenTo = at.ingredient === ing.ref ? carrierFile(carrier, ing.meta) : carrier;
+      byPath.set(at.path, { path: at.path, ingredient: at.ingredient, writtenTo, carrier });
     }
   }
   return [...byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -1295,7 +1298,7 @@ export function orphanReason(p: Plan, statuses: readonly FileStatus[], path: str
   const s = statuses.find((x) => x.path === path);
   if (s !== undefined && primaryOrphan(p, s)) return "orphan: written to AGENTS.md only (agents-md.primary)";
   const carried = p.carried.find((c) => c.path === path);
-  return carried ? `orphan: written to ${carried.writtenTo} only` : "orphan: no longer produced by the Forge";
+  return carried ? `orphan: written to ${carried.carrier} only` : "orphan: no longer produced by the Forge";
 }
 
 /** Returns true when the orphan is due to agents-md.primary (spec 41 §4.8). */

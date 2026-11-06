@@ -205,7 +205,6 @@ export interface ExplainedFile {
   dir?: string | null;
 }
 
-/** The planned file at `file`, compared as given (the caller normalizes); null when the Forge does not produce it. */
 /** What `explain` answers for a file a carried skip left to its carrier (spec 61 §6.1, §9): the carrier, not an error. */
 export interface CarriedFile {
   path: string;
@@ -219,6 +218,7 @@ export function carriedFile(p: Plan, file: string): CarriedFile | null {
   return c ? { path: c.path, writtenTo: c.writtenTo, ingredient: c.ingredient } : null;
 }
 
+/** The planned file at `file`, compared as given (the caller normalizes); null when the Forge does not produce it. */
 export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile | null {
   const f = p.files.find((x) => x.path === file);
   if (!f) return null;

@@ -905,7 +905,7 @@ program
       // Spec 19 §3.2: the six states sync --check refuses are shown; which those are is diffReport's to say
       const isPrimary = primaryOrphan(p, s);
       // Spec 61 §6.1: an orphan a carried skip left names its carrier
-      const carriedTo = p.carried.find((c) => c.path === s.path)?.writtenTo;
+      const carriedTo = p.carried.find((c) => c.path === s.path)?.carrier;
       if (await printFileDiff(ws.root, s, { isPrimary, carriedTo })) shown++;
     }
     if (!shown) console.log(pc.green("no differences"));

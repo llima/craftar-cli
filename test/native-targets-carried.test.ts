@@ -51,7 +51,7 @@ describe("spec 61 §6.1 — always-on rules left to AGENTS.md", () => {
     expect(agents).toContain("Use tabs.");
     expect(agents).toContain("Both.");
     expect(agents).not.toContain("Be brief.");
-    expect(p.carried).toEqual([{ path: ".cursor/rules/style.mdc", ingredient: "rule/style", writtenTo: "AGENTS.md" }]);
+    expect(p.carried).toEqual([{ path: ".cursor/rules/style.mdc", ingredient: "rule/style", writtenTo: "AGENTS.md", carrier: "AGENTS.md" }]);
   });
 
   it("[cursor]: with no agents-md, style is written to .cursor/rules/ with alwaysApply: true", async () => {
@@ -69,7 +69,7 @@ describe("spec 61 §6.1 — always-on rules left to AGENTS.md", () => {
   it("[copilot, agents-md] with only default always-on rules: no copilot-instructions.md, carried to AGENTS.md", async () => {
     const p = await planOf(await ws(["copilot", "agents-md"], { ingredients: [RULES[0]] }));
     expect(paths(p)).toEqual(["AGENTS.md"]);
-    expect(p.carried).toEqual([{ path: ".github/copilot-instructions.md", ingredient: "rule/*", writtenTo: "AGENTS.md" }]);
+    expect(p.carried).toEqual([{ path: ".github/copilot-instructions.md", ingredient: "rule/*", writtenTo: "AGENTS.md", carrier: "AGENTS.md" }]);
   });
 });
 
@@ -79,7 +79,7 @@ describe("spec 61 §9 — commands left to .agents/skills/", () => {
     expect(paths(p).filter((x) => x.startsWith(".github/prompts/"))).toEqual([".github/prompts/fix.prompt.md"]);
     expect(paths(p)).toContain(".agents/skills/review/SKILL.md");
     expect(paths(p)).toContain(".agents/skills/fix/SKILL.md");
-    expect(p.carried).toContainEqual({ path: ".github/prompts/review.prompt.md", ingredient: "command/review", writtenTo: ".agents/skills/" });
+    expect(p.carried).toContainEqual({ path: ".github/prompts/review.prompt.md", ingredient: "command/review", writtenTo: ".agents/skills/review/SKILL.md", carrier: ".agents/skills/" });
   });
 
   it("[copilot]: with no agent-skills, review keeps its prompt file", async () => {
@@ -113,6 +113,8 @@ describe("spec 61 §6.1 — explain and the orphan reason name the carrier (crit
     expect(r.stdout).toContain("written to  AGENTS.md");
     expect(r.stdout).toContain("ingredient  rule/style");
     const none = runCli(["explain", ".cursor/rules/nope.mdc", "--workspace", s.wsRoot]);
+    const sk = await ws(["copilot", "agent-skills"]);
+    expect(carriedFile(await planOf(sk), ".github/prompts/review.prompt.md")).toEqual({ path: ".github/prompts/review.prompt.md", writtenTo: ".agents/skills/review/SKILL.md", ingredient: "command/review" });
     expect(none.code).toBe(1);
   });
 
@@ -136,7 +138,7 @@ describe("spec 61 §6.1 — explain and the orphan reason name the carrier (crit
   it("under agents-md.primary, a .claude/rules/ orphan keeps the primary wording; the cursor file names AGENTS.md", async () => {
     const p = await planOf(await ws(["claude-code", "cursor", "agents-md"], { primary: true, ingredients: [RULES[0]] }));
     expect(paths(p)).toEqual(["AGENTS.md"]);
-    expect(p.carried).toEqual([{ path: ".cursor/rules/style.mdc", ingredient: "rule/style", writtenTo: "AGENTS.md" }]);
+    expect(p.carried).toEqual([{ path: ".cursor/rules/style.mdc", ingredient: "rule/style", writtenTo: "AGENTS.md", carrier: "AGENTS.md" }]);
   });
 });
 
