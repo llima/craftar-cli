@@ -189,7 +189,8 @@ const D4_ORPHAN = (p: string) => `${p} is no longer produced by the Forge — no
 const D5_KIRO = (p: string, hint: string) => `${p} is a kiro file — promote reads only what the claude-code target wrote${hint}`;
 const D5_AGENTSMD = (p: string) => `${p} holds several rules in one file — promote reads only what the claude-code target wrote`;
 /** D5 for new targets (spec 61): a file of a non-legacy target. */
-const D5_TARGET = (p: string, target: string, hint: string) => `${p} is a ${target} file — promote reads only what the claude-code target wrote${hint}`;
+const D5_TARGET = (p: string, target: string, hint: string) =>
+  `${p} is ${/^[aeiou]/.test(target) ? "an" : "a"} ${target} file — promote reads only what the claude-code target wrote${hint}`;
 const D5_SERVICE = (p: string) => `${p} is a service file — promote reads only what the claude-code target wrote; change the service ingredient in the Forge`;
 const D6 = (p: string) => `${p} holds every mcp ingredient in one file — edit the mcp ingredient in the Forge`;
 const D7 = (ing: string, p: string, state: string, profile: string) =>
