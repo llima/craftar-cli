@@ -1,22 +1,13 @@
-/**
- * Cursor emitter (spec 61 §7).
- *
- * Writes rules to `.cursor/rules/<name>.mdc`, agents to `.cursor/agents/<name>.md`,
- * and MCP servers to `.cursor/mcp.json`.
- */
-
 import { serializeFrontmatter } from "../core/frontmatter.js";
+import { ENV_NAME, type Ingredient } from "../schema/index.js";
+import type { ResolvedIngredient } from "../core/resolve.js";
 import { mcpServers, MCP_FILE, outName, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
-import type { ResolvedIngredient } from "../core/resolve.js";
-import type { Ingredient } from "../schema/index.js";
 
 /**
- * Cursor emitter: writes rules, agents, and MCP configuration.
- *
- * - Rules: `.cursor/rules/<name>.mdc` with Cursor's MDC format (YAML frontmatter + markdown body)
- * - Agents: `.cursor/agents/<name>.md` with frontmatter for name, description, and tools
- * - MCP: `.cursor/mcp.json` with `mcpServers` object
+ * Cursor target (spec 61 §3.3, §5.2): `.cursor/rules/<name>.mdc`, `.cursor/agents/<name>.md`, `.cursor/mcp.json`.
+ * Text files keep the line endings of the file they replace (LF when new) and never carry a BOM.
+ * Commands and skills reach Cursor through the agent-skills target; the matrix warns for them here.
  */
 export const cursor: Emitter<"cursor"> = {
   target: "cursor",
@@ -24,33 +15,23 @@ export const cursor: Emitter<"cursor"> = {
     const out: PlannedFile[] = [];
     const t = "cursor";
     const mcp: ResolvedIngredient[] = [];
-
     for (const ing of ctx.aimed) {
       const m = ctx.meta(ing);
       switch (m.type) {
         case "rule": {
-          const body = await ctx.text(ing, m.file, "cursor");
           const path = `.cursor/rules/${outName(m)}.mdc`;
-          // Cursor rules use MDC format: YAML frontmatter with alwaysApply, description, and/or globs
-          // An "always" inclusion rule becomes alwaysApply: true
-          // A scoped rule uses globs from the ingredient's inclusion paths
-          const frontmatter = cursorRuleFrontmatter(m);
-          const doc = m.frontmatterRaw != null
-            ? serializeFrontmatter(frontmatter, body, { raw: m.frontmatterRaw })
-            : serializeFrontmatter(frontmatter, body);
-          out.push(await textFile(ctx, path, doc, t, ing.ref));
+          const body = await ctx.text(ing, m.file, t);
+          out.push(await textFile(ctx, path, ruleFrontmatter(m) + "\n" + body, t, ing.ref, { keepBom: false }));
           break;
         }
         case "agent": {
-          const body = await ctx.text(ing, m.file, "cursor");
           const path = `.cursor/agents/${outName(m)}.md`;
-          // Cursor agents use frontmatter with name, description, and tools
-          const doc = serializeFrontmatter(
-            { name: outName(m), description: m.description, tools: m.tools },
-            body,
-            { raw: m.frontmatterRaw }
-          );
-          out.push(await textFile(ctx, path, doc, t, ing.ref));
+          const body = await ctx.text(ing, m.file, t);
+          if ((m.tools?.length ?? 0) > 0)
+            ctx.warn(`cursor: agent "${outName(m)}": tools have no Cursor field; dropped`);
+          // Never the agent's frontmatterRaw: that is Claude Code's frontmatter.
+          const doc = serializeFrontmatter({ name: outName(m), description: m.description, model: m.model }, body);
+          out.push(await textFile(ctx, path, doc, t, ing.ref, { keepBom: false }));
           break;
         }
         case "mcp":
@@ -62,48 +43,37 @@ export const cursor: Emitter<"cursor"> = {
         }
       }
     }
-
-    // Emit MCP configuration
-    const servers = mcpServers(ctx, t, MCP_FILE["cursor"], mcp);
-    if (Object.keys(servers).length) {
-      const json = JSON.stringify({ mcpServers: servers }, null, 2) + "\n";
-      out.push(await textFile(ctx, MCP_FILE["cursor"], json, t, "mcp/*"));
+    if (mcp.length) {
+      // mcpServers renders and runs credentialIn first; the reshape after it changes no value it checked.
+      const servers = envReferences(mcpServers(ctx, t, MCP_FILE.cursor, mcp));
+      out.push(await textFile(ctx, MCP_FILE.cursor, JSON.stringify({ mcpServers: servers }, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
     }
-
     return out;
   },
 };
 
-/**
- * Build Cursor rule frontmatter from an ingredient's metadata.
- *
- * Cursor rules use three key frontmatter fields:
- * - `alwaysApply`: true to include in every chat session
- * - `description`: for Agent to decide relevance (when alwaysApply is false and no globs)
- * - `globs`: file patterns for auto-attachment (when alwaysApply is false)
- *
- * Mapping from craftar rule inclusion:
- * - "always" → alwaysApply: true
- * - "auto" with fileMatchPattern → globs field
- * - "fileMatch" → globs field
- * - "manual" → neither (requires @-mention in chat)
- */
-function cursorRuleFrontmatter(m: Extract<Ingredient, { type: "rule" }>): Record<string, unknown> {
-  const fm: Record<string, unknown> = {};
-
-  if (m.inclusion === "always") {
-    fm.alwaysApply = true;
-  } else if (m.inclusion === "auto") {
-    // Auto: use description for intelligent application
-    if (m.description) {
-      fm.description = m.description;
-    }
-  } else if (m.inclusion === "fileMatch" && m.fileMatchPattern) {
-    // File match: convert to Cursor globs format
-    const patterns = Array.isArray(m.fileMatchPattern) ? m.fileMatchPattern : [m.fileMatchPattern];
-    fm.globs = patterns.join(", ");
+/** The .mdc frontmatter: keys in a fixed order, strings as JSON. A Claude `paths:` block (frontmatterRaw) is not reused. */
+function ruleFrontmatter(m: Extract<Ingredient, { type: "rule" }>): string {
+  const lines: string[] = [];
+  if (m.description) lines.push(`description: ${JSON.stringify(m.description)}`);
+  if (m.inclusion === "fileMatch") {
+    const p = m.fileMatchPattern;
+    lines.push(`globs: ${JSON.stringify(Array.isArray(p) ? p.join(",") : (p ?? "**"))}`);
   }
-  // "manual" inclusion: no alwaysApply, no description, no globs → requires @-mention
+  lines.push(`alwaysApply: ${m.inclusion === "always"}`);
+  return `---\n${lines.join("\n")}\n---\n`;
+}
 
-  return fm;
+const ENV_REF = new RegExp(`\\$\\{(${ENV_NAME})\\}`, "g");
+
+/** A deep copy whose string leaves read `${env:NAME}` for each `${NAME}`; keys and every other value as they are. */
+function envReferences(v: unknown): unknown {
+  if (typeof v === "string") return v.replace(ENV_REF, "${env:$1}");
+  if (Array.isArray(v)) return v.map(envReferences);
+  if (v !== null && typeof v === "object") {
+    const o: Record<string, unknown> = Object.create(null);
+    for (const [k, x] of Object.entries(v)) o[k] = envReferences(x);
+    return o;
+  }
+  return v;
 }

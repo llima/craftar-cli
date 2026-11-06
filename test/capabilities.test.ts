@@ -64,7 +64,7 @@ async function makeCapabilityForge(root: string, schema: number): Promise<void> 
     },
     // mcp
     {
-      meta: { type: "mcp", name: "cap-mcp", targets: "*", authEnv: ["CAP_TOKEN"], server: { command: "npx", args: ["cap-server"] } },
+      meta: { type: "mcp", name: "cap-mcp", targets: "*", authEnv: ["CAP_TOKEN"], server: { command: "npx", args: ["cap-server"], env: { TOKEN: "${CAP_TOKEN}" } } },
     },
     // script
     {
@@ -226,20 +226,18 @@ async function isAsHeld(
     return false;
   }
 
-  // For cursor rules and agents, we compare setting aside frontmatter (similar to claude-code)
-  // Cursor rules get frontmatter (alwaysApply, description, globs) and agents get frontmatter (name, description, tools)
+  // For cursor rules and agents, the emitter adds frontmatter (spec 61 §3.3, §5.2), so we compare the full
+  // output (with frontmatter) against the source (without). If the source has no frontmatter and the output
+  // does, they will differ — confirming the "converted" state. If somehow they match, it would be "as held".
+  // Note: unlike claude-code (native), cursor rules/agents are "converted" because frontmatter IS added.
   if ((type === "rule" || type === "agent") && f.target === "cursor") {
     for (const srcFile of sourceFiles) {
       try {
         const srcPath = path.join(ing.dir, srcFile);
-        const srcContent = toLf(stripBom((await fs.readFile(srcPath)).toString("utf8")));
-        const dstContent = toLf(stripBom(f.content.toString("utf8")));
-
-        // Strip frontmatter from both and compare
-        const srcBody = stripFrontmatter(srcContent).replace(/\n+$/, "").trim();
-        const dstBody = stripFrontmatter(dstContent).replace(/\n+$/, "").trim();
-
-        if (srcBody === dstBody) return true;
+        const srcContent = toLf(stripBom((await fs.readFile(srcPath)).toString("utf8"))).replace(/\n+$/, "").trim();
+        const dstContent = toLf(stripBom(f.content.toString("utf8"))).replace(/\n+$/, "").trim();
+        // Compare full content (including frontmatter) — cursor adds frontmatter, so they won't match
+        if (srcContent === dstContent) return true;
       } catch {
         continue;
       }
@@ -483,7 +481,7 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
     );
   });
 
-  it("no note of the 36 cells holds a backtick; native notes are null (except hook); unsupported notes are the one sentence", () => {
+  it("no note of the 36 cells holds a backtick; native notes are null (except hook); unsupported notes are non-empty", () => {
     const bad: string[] = [];
     for (const t of TARGETS)
       for (const ty of INGREDIENT_TYPES) {
@@ -491,7 +489,8 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
         if (c.note !== null && c.note.includes("`")) bad.push(`${t} · ${ty}`);
         // Native cells have null notes, except hook which has a note about registration (spec 43 §5.5)
         if (c.state === "native" && c.note !== null && !(t === "claude-code" && ty === "hook")) bad.push(`${t} · ${ty} (native with a note)`);
-        if (c.state === "unsupported" && c.note !== "skipped with a warning when aimed at this target") bad.push(`${t} · ${ty} (unsupported note)`);
+        // Unsupported cells must have a non-null, non-empty note (either the standard one or a custom explanation)
+        if (c.state === "unsupported" && (c.note === null || c.note.length === 0)) bad.push(`${t} · ${ty} (unsupported without note)`);
       }
     expect(bad).toEqual([]);
   });
@@ -551,13 +550,10 @@ const UNSUPPORTED: Array<[Target, string, string]> = [
   ...(["agent", "command", "skill", "mcp", "script", "steering", "hook", "service"] as const).map(
     (ty) => ["agents-md", ty, `agents-md: 1 ${ty} ingredient(s) have no AGENTS.md equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
-  // cursor supports rule, agent, mcp; the rest are unsupported (per-ingredient warnings)
-  ["cursor", "command", "cursor: command command/x has no Cursor equivalent — skipped"],
-  ["cursor", "skill", "cursor: skill skill/x has no Cursor equivalent — skipped"],
-  ["cursor", "script", "cursor: script script/x has no Cursor equivalent — skipped"],
-  ["cursor", "steering", "cursor: steering steering/x has no Cursor equivalent — skipped"],
-  ["cursor", "hook", "cursor: hook hook/x has no Cursor equivalent — skipped"],
-  ["cursor", "service", "cursor: service service/x has no Cursor equivalent — skipped"],
+  // cursor supports rule, agent, mcp; the rest are unsupported (per-type warnings like agents-md)
+  ...(["command", "skill", "script", "steering", "hook", "service"] as const).map(
+    (ty) => ["cursor", ty, `cursor: 1 ${ty} ingredient(s) have no Cursor equivalent — skipped: ${ty}/x`] as [Target, string, string],
+  ),
 ];
 
 describe("written() — the walk decides and warns from the matrix (spec 18 §9.3)", () => {

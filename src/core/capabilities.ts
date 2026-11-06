@@ -169,50 +169,34 @@ export const CAPABILITIES = {
   },
   cursor: {
     rule: {
-      state: "native",
+      state: "converted",
       output: [".cursor/rules/<name>.mdc"],
-      note: null,
+      note: "written as .mdc: alwaysApply: true for an always-on rule, globs from fileMatchPattern for a scoped one, a description alone for an auto or a manual one; the body unchanged",
     },
     agent: {
-      state: "native",
+      state: "converted",
       output: [".cursor/agents/<name>.md"],
-      note: null,
+      note: "name, description and model kept; tools and allowedTools have no Cursor field and are dropped with a warning",
     },
     command: {
       state: "unsupported",
       output: [],
-      note: "skipped with a warning when aimed at this target",
+      note: "through agent-skills: Cursor moved commands to skills, written to .agents/skills/ by the agent-skills target",
     },
     skill: {
       state: "unsupported",
       output: [],
-      note: "skipped with a warning when aimed at this target",
+      note: "through agent-skills: Cursor reads .agents/skills/, written by the agent-skills target",
     },
     mcp: {
-      state: "native",
+      state: "converted",
       output: [".cursor/mcp.json"],
-      note: null,
+      note: "the servers under mcpServers; a ${NAME} reference becomes ${env:NAME}",
     },
-    script: {
-      state: "unsupported",
-      output: [],
-      note: "skipped with a warning when aimed at this target",
-    },
-    steering: {
-      state: "unsupported",
-      output: [],
-      note: "skipped with a warning when aimed at this target",
-    },
-    hook: {
-      state: "unsupported",
-      output: [],
-      note: "skipped with a warning when aimed at this target",
-    },
-    service: {
-      state: "unsupported",
-      output: [],
-      note: "skipped with a warning when aimed at this target",
-    },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "not written yet: Cursor's hook events differ — planned for a later release" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
@@ -273,7 +257,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type" }
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
-  cursor: { label: "Cursor", per: "ingredient" },
+  cursor: { label: "Cursor", per: "type" },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {
