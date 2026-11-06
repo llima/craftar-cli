@@ -226,6 +226,27 @@ async function isAsHeld(
     return false;
   }
 
+  // For cursor rules and agents, we compare setting aside frontmatter (similar to claude-code)
+  // Cursor rules get frontmatter (alwaysApply, description, globs) and agents get frontmatter (name, description, tools)
+  if ((type === "rule" || type === "agent") && f.target === "cursor") {
+    for (const srcFile of sourceFiles) {
+      try {
+        const srcPath = path.join(ing.dir, srcFile);
+        const srcContent = toLf(stripBom((await fs.readFile(srcPath)).toString("utf8")));
+        const dstContent = toLf(stripBom(f.content.toString("utf8")));
+
+        // Strip frontmatter from both and compare
+        const srcBody = stripFrontmatter(srcContent).replace(/\n+$/, "").trim();
+        const dstBody = stripFrontmatter(dstContent).replace(/\n+$/, "").trim();
+
+        if (srcBody === dstBody) return true;
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
   // For skill with dir layout, check the specific file in the planned path
   if (type === "skill" && (meta.layout as string) === "dir") {
     // Get the filename from the planned path
@@ -462,7 +483,7 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
     );
   });
 
-  it("no note of the 27 cells holds a backtick; native notes are null (except hook); unsupported notes are the one sentence", () => {
+  it("no note of the 36 cells holds a backtick; native notes are null (except hook); unsupported notes are the one sentence", () => {
     const bad: string[] = [];
     for (const t of TARGETS)
       for (const ty of INGREDIENT_TYPES) {
@@ -530,11 +551,18 @@ const UNSUPPORTED: Array<[Target, string, string]> = [
   ...(["agent", "command", "skill", "mcp", "script", "steering", "hook", "service"] as const).map(
     (ty) => ["agents-md", ty, `agents-md: 1 ${ty} ingredient(s) have no AGENTS.md equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
+  // cursor supports rule, agent, mcp; the rest are unsupported (per-ingredient warnings)
+  ["cursor", "command", "cursor: command command/x has no Cursor equivalent — skipped"],
+  ["cursor", "skill", "cursor: skill skill/x has no Cursor equivalent — skipped"],
+  ["cursor", "script", "cursor: script script/x has no Cursor equivalent — skipped"],
+  ["cursor", "steering", "cursor: steering steering/x has no Cursor equivalent — skipped"],
+  ["cursor", "hook", "cursor: hook hook/x has no Cursor equivalent — skipped"],
+  ["cursor", "service", "cursor: service service/x has no Cursor equivalent — skipped"],
 ];
 
 describe("written() — the walk decides and warns from the matrix (spec 18 §9.3)", () => {
-  it("the 13 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
-    expect(UNSUPPORTED).toHaveLength(13);
+  it("the 19 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
+    expect(UNSUPPORTED).toHaveLength(19);
     for (const [target, type, text] of UNSUPPORTED) {
       expect(record(await resolutionOf([spec(type, "x")]), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
       const other = target === "claude-code" ? ["kiro"] : ["claude-code"];

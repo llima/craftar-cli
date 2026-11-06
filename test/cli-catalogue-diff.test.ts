@@ -360,7 +360,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(gl.find((l) => l.includes("rule/gone"))).toMatch(/^  ✗ rule\/gone\s+not in this Forge$/);
   });
 
-  it("text mode: targets header, matrix, legend and one paths line per writing cell (14) plus services", async () => {
+  it("text mode: targets header, matrix, legend and one paths line per writing cell (17) plus services", async () => {
     const s = await cat();
     const r = runCli(["targets"], { cwd: s.wsRoot });
     expect(r.code).toBe(0);
@@ -369,11 +369,11 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     const at = norm.indexOf("claude-code kiro agents-md cursor");
     expect(at).toBeGreaterThan(0);
     expect(norm.slice(at + 1, at + 10)).toEqual([
-      "rule native converted converted unsupported",
-      "agent native converted unsupported unsupported",
+      "rule native converted converted native",
+      "agent native converted unsupported native",
       "command native converted unsupported unsupported",
       "skill native converted unsupported unsupported",
-      "mcp native native unsupported unsupported",
+      "mcp native native unsupported native",
       "script native unsupported unsupported unsupported",
       "steering unsupported native unsupported unsupported",
       "hook native unsupported unsupported unsupported",
@@ -387,14 +387,17 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "claude-code · rule .claude/rules/<name>.md",
       "kiro · rule .kiro/steering/<name>.md — inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)",
       "agents-md · rule AGENTS.md — always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning",
+      "cursor · rule .cursor/rules/<name>.mdc",
       "claude-code · agent .claude/agents/<name>.md",
       "kiro · agent .kiro/agents/<name>.json — written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files",
+      "cursor · agent .cursor/agents/<name>.md",
       "claude-code · command .claude/commands/<name>.md",
       "kiro · command .kiro/steering/commands/<name>.md — written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
       "claude-code · skill .claude/skills/<name>/<file>, .claude/skills/<name>.md",
       "kiro · skill .kiro/skills/<name>/<file> — in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md",
       "claude-code · mcp .mcp.json, .claude/settings.craftar.example.json",
       "kiro · mcp .kiro/settings/mcp.json",
+      "cursor · mcp .cursor/mcp.json",
       "claude-code · script .claude/scripts/<file>",
       "kiro · steering .kiro/steering/<name>.md",
       "claude-code · hook .claude/hooks/<file>, .claude/settings.craftar.example.json — the registration is written to .claude/settings.craftar.example.json, to copy",

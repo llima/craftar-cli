@@ -169,14 +169,14 @@ export const CAPABILITIES = {
   },
   cursor: {
     rule: {
-      state: "unsupported",
-      output: [],
-      note: "skipped with a warning when aimed at this target",
+      state: "native",
+      output: [".cursor/rules/<name>.mdc"],
+      note: null,
     },
     agent: {
-      state: "unsupported",
-      output: [],
-      note: "skipped with a warning when aimed at this target",
+      state: "native",
+      output: [".cursor/agents/<name>.md"],
+      note: null,
     },
     command: {
       state: "unsupported",
@@ -189,9 +189,9 @@ export const CAPABILITIES = {
       note: "skipped with a warning when aimed at this target",
     },
     mcp: {
-      state: "unsupported",
-      output: [],
-      note: "skipped with a warning when aimed at this target",
+      state: "native",
+      output: [".cursor/mcp.json"],
+      note: null,
     },
     script: {
       state: "unsupported",
@@ -264,7 +264,7 @@ const writtenIs: [
   Equal<Written<"claude-code">, "rule" | "agent" | "command" | "skill" | "mcp" | "script" | "hook">,
   Equal<Written<"kiro">, "rule" | "agent" | "command" | "skill" | "mcp" | "steering">,
   Equal<Written<"agents-md">, "rule">,
-  Equal<Written<"cursor">, never>,
+  Equal<Written<"cursor">, "rule" | "agent" | "mcp">,
 ] = [true, true, true, true];
 void writtenIs;
 
@@ -273,7 +273,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type" }
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
-  cursor: { label: "Cursor", per: "type" },
+  cursor: { label: "Cursor", per: "ingredient" },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {

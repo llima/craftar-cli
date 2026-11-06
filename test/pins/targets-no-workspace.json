@@ -200,14 +200,18 @@
       "inUse": null,
       "capabilities": {
         "rule": {
-          "state": "unsupported",
-          "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "state": "native",
+          "output": [
+            ".cursor/rules/<name>.mdc"
+          ],
+          "note": null
         },
         "agent": {
-          "state": "unsupported",
-          "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "state": "native",
+          "output": [
+            ".cursor/agents/<name>.md"
+          ],
+          "note": null
         },
         "command": {
           "state": "unsupported",
@@ -220,9 +224,11 @@
           "note": "skipped with a warning when aimed at this target"
         },
         "mcp": {
-          "state": "unsupported",
-          "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "state": "native",
+          "output": [
+            ".cursor/mcp.json"
+          ],
+          "note": null
         },
         "script": {
           "state": "unsupported",

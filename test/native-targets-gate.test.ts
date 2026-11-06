@@ -178,8 +178,9 @@ describe("native targets gate (spec 61 §7)", () => {
     const ws = await loadWorkspace(s.wsRoot);
     const p = await plan(ws);
     
-    // Should have warnings about cursor skipping the rule
-    expect(p.warnings.some((w) => w.includes("cursor") && w.includes("rule/style") && w.includes("skipped"))).toBe(true);
+    // Cursor now supports rules, so no skip warning for rule/style
+    // (The test verifies that cursor is in the workspace targets and produces files)
+    expect(p.files.some((f) => f.target === "cursor" && f.path.endsWith(".mdc"))).toBe(true);
 
     // Get statuses and apply the plan
     const lock = await readLock(s.wsRoot);
