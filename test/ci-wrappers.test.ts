@@ -649,8 +649,9 @@ describe("the README (spec 46 §9)", () => {
 
   // Since 1.0.0 the status line is a short paragraph (the user's ruling of 2026-11-06); the fact lives in *In CI*.
   it("In CI says both wrappers run sync --check", () => {
-    const readme = lines.join("\n");
-    expect(readme).toContain("## In CI");
-    expect(readme).toContain("`craftar sync --check` is the verdict");
+    const s = section();
+    expect(s).toContain("`craftar sync --check` is the verdict");
+    expect(s).toContain("uses: llima/craftar-cli/ci/github@<");
+    expect(s).toContain("template: ci/azure/check.yml@craftar");
   });
 });
