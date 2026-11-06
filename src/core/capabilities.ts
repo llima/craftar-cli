@@ -198,6 +198,33 @@ export const CAPABILITIES = {
     hook: { state: "unsupported", output: [], note: "not written yet: Cursor's hook events differ — planned for a later release" },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
+  copilot: {
+    rule: {
+      state: "converted",
+      output: [".github/instructions/<name>.instructions.md"],
+      note: "written as .instructions.md in .github/instructions/; applyTo from fileMatchPattern (list or string), description from description field when present",
+    },
+    agent: {
+      state: "converted",
+      output: [".github/agents/<name>.md"],
+      note: "name and description kept; tools have no Copilot field and are dropped with a warning",
+    },
+    command: {
+      state: "converted",
+      output: [".github/prompts/<name>.prompt.md"],
+      note: "written as .prompt.md in .github/prompts/; description as YAML frontmatter when present, body unchanged",
+    },
+    skill: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    mcp: {
+      state: "converted",
+      output: [".vscode/mcp.json"],
+      note: "the servers under servers; each has type: stdio and the server's command, args, env",
+    },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -249,7 +276,8 @@ const writtenIs: [
   Equal<Written<"kiro">, "rule" | "agent" | "command" | "skill" | "mcp" | "steering">,
   Equal<Written<"agents-md">, "rule">,
   Equal<Written<"cursor">, "rule" | "agent" | "mcp">,
-] = [true, true, true, true];
+  Equal<Written<"copilot">, "rule" | "agent" | "command" | "mcp">,
+] = [true, true, true, true, true];
 void writtenIs;
 
 /** How a target words the warning for a type it does not write. Not part of `targets --json`. */
@@ -258,6 +286,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type" }
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
   cursor: { label: "Cursor", per: "type" },
+  copilot: { label: "Copilot", per: "type" },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {

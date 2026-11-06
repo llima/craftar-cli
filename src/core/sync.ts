@@ -22,6 +22,7 @@ import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
 import { AGENTS_MD_BUDGET_KEY, agentsMd } from "../emitters/agents-md.js";
 import { cursor } from "../emitters/cursor.js";
+import { copilot } from "../emitters/copilot.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
@@ -41,7 +42,7 @@ export { AGENTS_MD_BUDGET_KEY };
 export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
 
 // Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
-const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor };
+const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor, copilot };
 
 /**
  * Runs one target's emitter on the walk of what the matrix says it writes. The walk warns about the

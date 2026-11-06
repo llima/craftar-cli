@@ -32,9 +32,9 @@ function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
 /* ------------------------------------------------------------------ */
 
 /**
- * All AI-coder targets Craftar supports. Spec 61 §7: `cursor` added at Forge schema 15.
+ * All AI-coder targets Craftar supports. Spec 61 §7: `cursor` added at Forge schema 15, `copilot` at schema 15.
  */
-export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor"] as const;
+export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot"] as const;
 export type Target = (typeof TARGETS)[number];
 export const TargetSchema = z.enum(TARGETS);
 
