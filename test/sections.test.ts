@@ -295,23 +295,23 @@ describe("targeted sections (spec 41 Part B §11.3)", () => {
     const problem = "section x: targets= takes one or more of claude-code, kiro, agents-md, cursor, comma-separated, each once";
 
     // Empty value
-    expect(markerLine(O("x", ""), { targets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", ""), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
 
     // Unknown target
-    expect(markerLine(O("x", "vscode"), { targets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "vscode"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
 
     // Duplicate target
-    expect(markerLine(O("x", "kiro,kiro"), { targets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "kiro,kiro"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
 
     // Trailing comma
-    expect(markerLine(O("x", "kiro,"), { targets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "kiro,"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
 
     // Wrong case
-    expect(markerLine(O("x", "Kiro"), { targets: true })).toEqual({ kind: "near", problem });
+    expect(markerLine(O("x", "Kiro"), { targets: true, nativeTargets: true })).toEqual({ kind: "near", problem });
 
     // Fake secret token - must not appear in message
     const fakeToken = "zz-secret-zz";
-    const result = markerLine(O("x", fakeToken), { targets: true });
+    const result = markerLine(O("x", fakeToken), { targets: true, nativeTargets: true });
     expect(result?.kind).toBe("near");
     expect((result as { problem?: string }).problem).toBe(problem);
     expect((result as { problem?: string }).problem).not.toContain(fakeToken);
@@ -418,5 +418,44 @@ describe("targeted sections (spec 41 Part B §11.3)", () => {
     expect(firstMarkerLine(targetedOpener + "\n")).toBe(1);
     expect(firstMarkerLine("body\n" + targetedOpener + "\n")).toBe(2);
     expect(firstMarkerLine("body\n" + targetedCloser + "\n")).toBe(2); // closer is always same
+  });
+});
+
+
+describe("native target gate in section markers (spec 61 §7)", () => {
+  const OPEN_T = (n: string, targets: string) => `<!-- craftar:section ${n} targets=${targets} -->`;
+
+  it("schema 14 with targets=cursor → near miss pointing at schema 15", () => {
+    // At schema 14, targets=cursor should be rejected with a near miss message
+    const text = `# Body\n${OPEN_T("intro", "cursor")}\nHello.\n${CLOSE}\n`;
+    expect(() => parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: false }))
+      .toThrow("section intro targets=: cursor needs schema: 15 in craftar.forge.yaml");
+  });
+
+  it("schema 14 with malformed targets=nope → error lists exactly the three legacy names", () => {
+    // At schema 14, an invalid target like "nope" should list claude-code, kiro, agents-md only
+    const text = `# Body\n${OPEN_T("intro", "nope")}\nHello.\n${CLOSE}\n`;
+    expect(() => parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: false }))
+      .toThrow("section intro: targets= takes one or more of claude-code, kiro, agents-md, comma-separated, each once");
+  });
+
+  it("schema 15 with malformed targets=nope → error lists four names including cursor", () => {
+    // At schema 15, an invalid target should list all four targets including cursor
+    const text = `# Body\n${OPEN_T("intro", "nope")}\nHello.\n${CLOSE}\n`;
+    expect(() => parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: true }))
+      .toThrow("section intro: targets= takes one or more of claude-code, kiro, agents-md, cursor, comma-separated, each once");
+  });
+
+  it("schema 15 with targets=cursor → accepted", () => {
+    // At schema 15, targets=cursor should be accepted
+    const text = `# Body\n${OPEN_T("intro", "cursor")}\nHello.\n${CLOSE}\n`;
+    const p = parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: true });
+    expect(p.sections).toEqual([{ name: "intro", default: "Hello.\n", line: 2, targets: ["cursor"] }]);
+  });
+
+  it("schema 15 with targets=claude-code,cursor → accepted", () => {
+    const text = `# Body\n${OPEN_T("intro", "claude-code,cursor")}\nHello.\n${CLOSE}\n`;
+    const p = parseSections(text, "rule.md", "rule/tone", { targets: true, nativeTargets: true });
+    expect(p.sections).toEqual([{ name: "intro", default: "Hello.\n", line: 2, targets: ["claude-code", "cursor"] }]);
   });
 });

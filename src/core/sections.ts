@@ -1,5 +1,5 @@
 import { NO_LISTS, type ListContext } from "./list-params.js";
-import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_TARGET_SECTIONS, FORGE_SCHEMA_NATIVE_TARGETS, SECTION_NAME, TARGETS, LEGACY_TARGETS, type Owner, type Target, isLegacyTarget } from "../schema/index.js";
 import { FORGE_MANIFEST } from "./forge.js";
 import { substitute } from "./resolve.js";
 import { placeholders } from "./extract.js";
@@ -40,12 +40,15 @@ export type MarkerLineResult =
 export interface MarkerLineOptions {
   /** Whether to read `targets=` attribute on section markers. Default: false. */
   targets?: boolean;
+  /** Whether to allow native targets (cursor) in `targets=`. Default: false. Only relevant when `targets` is true. */
+  nativeTargets?: boolean;
 }
 
 /** What a line is to the grammar: an opener (with its name), a closer, a near miss, or text (null). */
 export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineResult {
   const l = line.endsWith("\n") ? line.slice(0, -1) : line;
   const readTargets = opts?.targets ?? false;
+  const allowNativeTargets = opts?.nativeTargets ?? false;
 
   const targeted = OPEN_TARGETED.exec(l);
   if (targeted && SECTION_NAME.test(targeted[1])) {
@@ -56,7 +59,7 @@ export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineRe
       return { kind: "near", problem: `section ${name} names targets, which a Forge reads only at schema: ${FORGE_SCHEMA_TARGET_SECTIONS} — set schema: ${FORGE_SCHEMA_TARGET_SECTIONS} in ${FORGE_MANIFEST}` };
     }
 
-    const targetsError = validateTargets(name, targetsValue);
+    const targetsError = validateTargets(name, targetsValue, allowNativeTargets);
     if (targetsError) {
       return { kind: "near", problem: targetsError };
     }
@@ -75,9 +78,14 @@ export function markerLine(line: string, opts?: MarkerLineOptions): MarkerLineRe
   return null;
 }
 
-/** Validate targets= value, return error message or undefined if valid. */
-function validateTargets(name: string, value: string): string | undefined {
-  const errorMsg = `section ${name}: targets= takes one or more of ${TARGETS.join(", ")}, comma-separated, each once`;
+/**
+ * Validate targets= value, return error message or undefined if valid.
+ * Below the native targets gate, only LEGACY_TARGETS are allowed; a known native target yields
+ * a near-miss message pointing at schema 15.
+ */
+function validateTargets(name: string, value: string, allowNativeTargets: boolean): string | undefined {
+  const allowed = allowNativeTargets ? TARGETS : LEGACY_TARGETS;
+  const errorMsg = `section ${name}: targets= takes one or more of ${allowed.join(", ")}, comma-separated, each once`;
 
   if (value === "") return errorMsg;
   if (value.endsWith(",")) return errorMsg;
@@ -86,7 +94,12 @@ function validateTargets(name: string, value: string): string | undefined {
   const seen = new Set<string>();
 
   for (const part of parts) {
-    if (!TARGETS.includes(part as Target)) return errorMsg;
+    // Below the gate, check if it's a known native target (near miss)
+    if (!allowNativeTargets && !isLegacyTarget(part) && (TARGETS as readonly string[]).includes(part)) {
+      // It's a native target like "cursor" but below the schema gate
+      return `section ${name} targets=: ${part} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in ${FORGE_MANIFEST}`;
+    }
+    if (!(allowed as readonly string[]).includes(part)) return errorMsg;
     if (seen.has(part)) return errorMsg;
     seen.add(part);
   }
@@ -123,6 +136,8 @@ export interface ParsedSections {
 export interface ParseSectionsOptions {
   /** Whether to read `targets=` attribute on section markers. Default: false. */
   targets?: boolean;
+  /** Whether to allow native targets (cursor) in `targets=`. Default: false. Only relevant when `targets` is true. */
+  nativeTargets?: boolean;
 }
 
 /** Lines that keep their terminator; the last one may have none. */

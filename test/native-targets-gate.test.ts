@@ -120,7 +120,7 @@ describe("native targets gate (spec 61 §7)", () => {
 
     const ws = await loadWorkspace(s.wsRoot);
     await expect(plan(ws)).rejects.toThrow(
-      "ingredients/rules/tone/rule.md: section intro targets=: cursor needs schema: 15 in craftar.forge.yaml"
+      "section markers in ingredients/rules/tone/rule.md:3: section intro targets=: cursor needs schema: 15 in craftar.forge.yaml"
     );
   });
 

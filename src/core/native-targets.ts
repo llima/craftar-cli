@@ -5,7 +5,7 @@
  * (cursor), and provide near-miss messages for use below the schema gate.
  */
 
-import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget, FORGE_SCHEMA_NATIVE_TARGETS, type ForgeManifest } from "../schema/index.js";
+import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget, FORGE_SCHEMA_NATIVE_TARGETS } from "../schema/index.js";
 
 /**
  * The targets that require Forge schema 15 (FORGE_SCHEMA_NATIVE_TARGETS).
@@ -19,7 +19,7 @@ export const NATIVE_TARGETS = TARGETS.filter((t) => !(LEGACY_TARGETS as readonly
  *
  * This is the ONE comparison with FORGE_SCHEMA_NATIVE_TARGETS.
  */
-export function readsNativeTargets(manifest: Pick<ForgeManifest, "schema">): boolean {
+export function readsNativeTargets(manifest: { schema: number }): boolean {
   return manifest.schema >= FORGE_SCHEMA_NATIVE_TARGETS;
 }
 

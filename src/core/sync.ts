@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { containRoot, escapeFileLine, escapeOf, escapeRefusal, escapingRows, readForgeFile, readForgeText, type Escape } from "./contain.js";
 import YAML from "yaml";
 import { loadForge, exists, listFiles, FORGE_MANIFEST, type Forge } from "./forge.js";
-import { readsNativeTargets, nativeTargetNearMiss, firstNewTarget } from "./native-targets.js";
+import { readsNativeTargets, firstNewTarget } from "./native-targets.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor, listsOf } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
@@ -16,7 +16,7 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
 import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockV2, type LockV3, type LockV4, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyTarget, isLegacyOwner } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockV2, type LockV3, type LockV4, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyOwner } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -580,7 +580,7 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
   const declared = new Map<string, Set<string>>(); // section key → names declared by resolved ingredients
   const byRef: Plan["sections"] = new Map();
   let firstMarker: string | null = null;
-  const parseOpts = { targets: readsTargetSections(forge.manifest) };
+  const parseOpts = { targets: readsTargetSections(forge.manifest), nativeTargets: readsNativeTargets(forge.manifest) };
   for (const ing of resolution.ingredients) {
     const key = sectionKey(ing.meta);
     const names = declared.get(key) ?? new Set<string>();
@@ -601,18 +601,6 @@ async function sectionPass(forge: Forge, resolution: Resolution, warnings: strin
         parsed.set(abs, p);
         files.push({ rel, p });
         if (p.sections.length && firstMarker === null) firstMarker = `${p.file}:${p.sections[0].line}`;
-        // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target in a section's targets= is a near miss.
-        if (!readsNativeTargets(forge.manifest)) {
-          for (const s of p.sections) {
-            if (s.targets) {
-              for (const t of s.targets) {
-                if (!isLegacyTarget(t)) {
-                  throw new Error(nativeTargetNearMiss(forgeRel(forge, abs), `section ${s.name} targets=`, t));
-                }
-              }
-            }
-          }
-        }
         // Edge case: a service file with a targeted section fails the plan
         if (ing.meta.type === "service") {
           for (const s of p.sections) {
