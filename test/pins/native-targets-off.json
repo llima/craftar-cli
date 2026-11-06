@@ -1,0 +1,1256 @@
+{
+  "all-three": {
+    "plan": {
+      "files": [
+        {
+          "path": ".claude/agents/helper.md",
+          "target": "claude-code",
+          "ingredient": "agent/helper",
+          "sha256": "sha256:652e846f8d797202bcd1417c6fa0ab0fa6edc53bbcc3fd63131e68054e5d6ee1",
+          "text": "---\nname: helper\ndescription: Helps with tasks\ntools: \n---\nHelp the user with their tasks.\n"
+        },
+        {
+          "path": ".claude/commands/review.md",
+          "target": "claude-code",
+          "ingredient": "command/review",
+          "sha256": "sha256:64f688bfa2f5941eb0df7b48af2bc7fa5c4ef49ce945669e5753cdbec0f11383",
+          "text": "---\ndescription: Run a code review\n---\nRun a code review on the current changes.\n"
+        },
+        {
+          "path": ".claude/hooks/guard-path.py",
+          "target": "claude-code",
+          "ingredient": "hook/guard-path",
+          "sha256": "sha256:3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172",
+          "text": "print(\"ok\")\n"
+        },
+        {
+          "path": ".claude/rules/api.md",
+          "target": "claude-code",
+          "ingredient": "rule/api",
+          "sha256": "sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9",
+          "text": "# API\nEvery endpoint is RESTful.\n"
+        },
+        {
+          "path": ".claude/rules/release.md",
+          "target": "claude-code",
+          "ingredient": "rule/release",
+          "sha256": "sha256:1989d874184806e1dbaaed0a22a2beb6742fadefad3635eb685aaf9f12a751a8",
+          "text": "# Release\nTag after review.\n"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "target": "claude-code",
+          "ingredient": "rule/style",
+          "sha256": "sha256:7d790d171042a1dcb276a0264789508fa082015ade6bc384b581397c26352459",
+          "text": "# Style\nUse consistent formatting.\nSee .claude/rules/api.md for API rules.\n"
+        },
+        {
+          "path": ".claude/scripts/lint.sh",
+          "target": "claude-code",
+          "ingredient": "script/lint",
+          "sha256": "sha256:b9e39e5da1306f5e61d64f88821cd0e00f1911498fccefeb680a98982cb0830c",
+          "text": "#!/bin/sh\necho linting\nexit 0\n"
+        },
+        {
+          "path": ".claude/settings.craftar.example.json",
+          "target": "claude-code",
+          "ingredient": "mcp/*",
+          "sha256": "sha256:21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb",
+          "text": "{\n  \"env\": {\n    \"ACME_TOKEN\": \"\"\n  },\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash|PowerShell\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"python3\",\n            \"args\": [\n              \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py\"\n            ],\n            \"timeout\": 10\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+        },
+        {
+          "path": ".claude/skills/deploy/run.sh",
+          "target": "claude-code",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561",
+          "text": "#!/bin/sh\necho deploying\n"
+        },
+        {
+          "path": ".claude/skills/deploy/SKILL.md",
+          "target": "claude-code",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f",
+          "text": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n"
+        },
+        {
+          "path": ".claude/skills/docs.md",
+          "target": "claude-code",
+          "ingredient": "skill/docs",
+          "sha256": "sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683",
+          "text": "---\nname: docs\ndescription: Generate documentation\n---\nGenerate docs.\n"
+        },
+        {
+          "path": ".kiro/agents/helper.json",
+          "target": "kiro",
+          "ingredient": "agent/helper",
+          "sha256": "sha256:030622e0955c3e6681f5f56c305f7763e1a6bce1422e6e4aacfa7d44d1008e3d",
+          "text": "{\n  \"name\": \"helper\",\n  \"description\": \"Helps with tasks\",\n  \"prompt\": \"Help the user with their tasks.\",\n  \"tools\": [],\n  \"allowedTools\": [],\n  \"resources\": [\n    \"file://.kiro/steering/**/*.md\"\n  ],\n  \"permissions\": {\n    \"rules\": [\n      {\n        \"capability\": \"fs_read\",\n        \"match\": [\n          \"./**\"\n        ],\n        \"effect\": \"allow\"\n      }\n    ]\n  }\n}\n"
+        },
+        {
+          "path": ".kiro/settings/mcp.json",
+          "target": "kiro",
+          "ingredient": "mcp/*",
+          "sha256": "sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e",
+          "text": "{\n  \"mcpServers\": {\n    \"tracker\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"acme-tracker\"\n      ],\n      \"env\": {\n        \"ACME_ORG\": \"acme\"\n      }\n    }\n  }\n}\n"
+        },
+        {
+          "path": ".kiro/skills/deploy/run.sh",
+          "target": "kiro",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561",
+          "text": "#!/bin/sh\necho deploying\n"
+        },
+        {
+          "path": ".kiro/skills/deploy/SKILL.md",
+          "target": "kiro",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f",
+          "text": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n"
+        },
+        {
+          "path": ".kiro/skills/docs/SKILL.md",
+          "target": "kiro",
+          "ingredient": "skill/docs",
+          "sha256": "sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683",
+          "text": "---\nname: docs\ndescription: Generate documentation\n---\nGenerate docs.\n"
+        },
+        {
+          "path": ".kiro/steering/api.md",
+          "target": "kiro",
+          "ingredient": "rule/api",
+          "sha256": "sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c",
+          "text": "---\ninclusion: fileMatch\nfileMatchPattern: \"src/api/**\"\n---\n\n<!-- GENERATED from .claude/rules/api.md by craftar -- do not edit. -->\n\n# API\nEvery endpoint is RESTful.\n"
+        },
+        {
+          "path": ".kiro/steering/commands/review.md",
+          "target": "kiro",
+          "ingredient": "command/review",
+          "sha256": "sha256:17fca98c3e14d73cfb32c02193aeff2ac89efbf1602ebaa8277d987295e20207",
+          "text": "---\ninclusion: manual\n---\n\n---\ndescription: Run a code review\n---\nRun a code review on the current changes.\n"
+        },
+        {
+          "path": ".kiro/steering/release.md",
+          "target": "kiro",
+          "ingredient": "rule/release",
+          "sha256": "sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3",
+          "text": "---\ninclusion: manual\n---\n\n<!-- GENERATED from .claude/rules/release.md by craftar -- do not edit. -->\n\n# Release\nTag after review.\n"
+        },
+        {
+          "path": ".kiro/steering/style.md",
+          "target": "kiro",
+          "ingredient": "rule/style",
+          "sha256": "sha256:01ff955e110b7589163b82fb715e70cb4b9637f1a0341a3050614a213660a943",
+          "text": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/style.md by craftar -- do not edit. -->\n\n# Style\nUse consistent formatting.\nSee .kiro/steering/api.md for API rules.\n"
+        },
+        {
+          "path": ".kiro/steering/tone.md",
+          "target": "kiro",
+          "ingredient": "steering/tone",
+          "sha256": "sha256:b516f3124243bbf60573c364e628d9d81460f044f064eb082c6d03b270c95d5e",
+          "text": "# Tone\nBe friendly and clear.\n"
+        },
+        {
+          "path": ".mcp.json",
+          "target": "claude-code",
+          "ingredient": "mcp/*",
+          "sha256": "sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e",
+          "text": "{\n  \"mcpServers\": {\n    \"tracker\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"acme-tracker\"\n      ],\n      \"env\": {\n        \"ACME_ORG\": \"acme\"\n      }\n    }\n  }\n}\n"
+        },
+        {
+          "path": "AGENTS.md",
+          "target": "agents-md",
+          "ingredient": "rule/*",
+          "sha256": "sha256:0d4e89aa278dd4d3a40024c7f678afa0119340873dc883f7b143150ae5135a5c",
+          "text": "<!-- GENERATED by craftar from the Forge. Edit the rule ingredients, not this file. -->\n\n# AGENTS.md — acme\n\nConventions for coding agents working in this workspace. Sections below are the always-on rules;\nscoped rules are listed at the end with the paths they apply to.\n\n<!-- rule: style -->\n# Style\nUse consistent formatting.\nSee .claude/rules/api.md for API rules.\n\n## Scoped rules\n\n- `.claude/rules/api.md` — applies to `src/api/**`\n- `.claude/rules/release.md` — manual\n"
+        }
+      ],
+      "warnings": [
+        "claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml",
+        "kiro: hook hook/guard-path has no Kiro equivalent — skipped",
+        "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper",
+        "agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review",
+        "agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs",
+        "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker",
+        "agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path"
+      ]
+    },
+    "sync": {
+      "code": 0,
+      "stdout": "craftar sync — profile acme · recipes base · targets claude-code, kiro, agents-md\n  wrote 23, removed 0 orphan(s), skipped 0\n  + .claude/agents/helper.md\n  + .claude/commands/review.md\n  + .claude/hooks/guard-path.py\n  + .claude/rules/api.md\n  + .claude/rules/release.md\n  + .claude/rules/style.md\n  + .claude/scripts/lint.sh\n  + .claude/settings.craftar.example.json\n  + .claude/skills/deploy/run.sh\n  + .claude/skills/deploy/SKILL.md\n  + .claude/skills/docs.md\n  + .kiro/agents/helper.json\n  + .kiro/settings/mcp.json\n  + .kiro/skills/deploy/run.sh\n  + .kiro/skills/deploy/SKILL.md\n  + .kiro/skills/docs/SKILL.md\n  + .kiro/steering/api.md\n  + .kiro/steering/commands/review.md\n  + .kiro/steering/release.md\n  + .kiro/steering/style.md\n  + .kiro/steering/tone.md\n  + .mcp.json\n  + AGENTS.md\n  warn claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\n  warn kiro: hook hook/guard-path has no Kiro equivalent — skipped\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\n  warn agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\n  warn agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs\n  warn agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker\n  warn agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path\n",
+      "stderr": ""
+    },
+    "lock": "{\n  \"schema\": 2,\n  \"forge\": {\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"commit\": null\n  },\n  \"profile\": \"acme\",\n  \"recipes\": [\n    \"base\"\n  ],\n  \"targets\": [\n    \"claude-code\",\n    \"kiro\",\n    \"agents-md\"\n  ],\n  \"generatedAt\": \"<timestamp>\",\n  \"files\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"hash\": \"sha256:652e846f8d797202bcd1417c6fa0ab0fa6edc53bbcc3fd63131e68054e5d6ee1\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\"\n    },\n    {\n      \"path\": \".claude/commands/review.md\",\n      \"hash\": \"sha256:64f688bfa2f5941eb0df7b48af2bc7fa5c4ef49ce945669e5753cdbec0f11383\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"command/review\"\n    },\n    {\n      \"path\": \".claude/hooks/guard-path.py\",\n      \"hash\": \"sha256:3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"hook/guard-path\"\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"hash\": \"sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".claude/rules/release.md\",\n      \"hash\": \"sha256:1989d874184806e1dbaaed0a22a2beb6742fadefad3635eb685aaf9f12a751a8\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/release\"\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"hash\": \"sha256:7d790d171042a1dcb276a0264789508fa082015ade6bc384b581397c26352459\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\"\n    },\n    {\n      \"path\": \".claude/scripts/lint.sh\",\n      \"hash\": \"sha256:b9e39e5da1306f5e61d64f88821cd0e00f1911498fccefeb680a98982cb0830c\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"script/lint\"\n    },\n    {\n      \"path\": \".claude/settings.craftar.example.json\",\n      \"hash\": \"sha256:21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\"\n    },\n    {\n      \"path\": \".claude/skills/deploy/run.sh\",\n      \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".claude/skills/deploy/SKILL.md\",\n      \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".claude/skills/docs.md\",\n      \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/docs\"\n    },\n    {\n      \"path\": \".kiro/agents/helper.json\",\n      \"hash\": \"sha256:030622e0955c3e6681f5f56c305f7763e1a6bce1422e6e4aacfa7d44d1008e3d\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/helper\"\n    },\n    {\n      \"path\": \".kiro/settings/mcp.json\",\n      \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"mcp/*\"\n    },\n    {\n      \"path\": \".kiro/skills/deploy/run.sh\",\n      \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".kiro/skills/deploy/SKILL.md\",\n      \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".kiro/skills/docs/SKILL.md\",\n      \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/docs\"\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"hash\": \"sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".kiro/steering/commands/review.md\",\n      \"hash\": \"sha256:17fca98c3e14d73cfb32c02193aeff2ac89efbf1602ebaa8277d987295e20207\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"command/review\"\n    },\n    {\n      \"path\": \".kiro/steering/release.md\",\n      \"hash\": \"sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/release\"\n    },\n    {\n      \"path\": \".kiro/steering/style.md\",\n      \"hash\": \"sha256:01ff955e110b7589163b82fb715e70cb4b9637f1a0341a3050614a213660a943\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/style\"\n    },\n    {\n      \"path\": \".kiro/steering/tone.md\",\n      \"hash\": \"sha256:b516f3124243bbf60573c364e628d9d81460f044f064eb082c6d03b270c95d5e\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"steering/tone\"\n    },\n    {\n      \"path\": \".mcp.json\",\n      \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\"\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"hash\": \"sha256:0d4e89aa278dd4d3a40024c7f678afa0119340873dc883f7b143150ae5135a5c\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\"\n    }\n  ]\n}\n",
+    "syncCheck": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base\n  unchanged 23\n  warn claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\n  warn kiro: hook hook/guard-path has no Kiro equivalent — skipped\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\n  warn agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\n  warn agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs\n  warn agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker\n  warn agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path\n\nworkspace in sync\n",
+      "stderr": ""
+    },
+    "status": {
+      "code": 0,
+      "stdout": "{\n  \"forge\": {\n    \"kind\": \"path\",\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"defaultBranch\": null,\n    \"commit\": null,\n    \"lockCommit\": null,\n    \"fetched\": false\n  },\n  \"statuses\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\",\n      \"lock\": {\n        \"path\": \".claude/agents/helper.md\",\n        \"hash\": \"sha256:652e846f8d797202bcd1417c6fa0ab0fa6edc53bbcc3fd63131e68054e5d6ee1\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"agent/helper\"\n      }\n    },\n    {\n      \"path\": \".claude/commands/review.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"command/review\",\n      \"lock\": {\n        \"path\": \".claude/commands/review.md\",\n        \"hash\": \"sha256:64f688bfa2f5941eb0df7b48af2bc7fa5c4ef49ce945669e5753cdbec0f11383\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"command/review\"\n      }\n    },\n    {\n      \"path\": \".claude/hooks/guard-path.py\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"hook/guard-path\",\n      \"lock\": {\n        \"path\": \".claude/hooks/guard-path.py\",\n        \"hash\": \"sha256:3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"hook/guard-path\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".claude/rules/api.md\",\n        \"hash\": \"sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/release.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/release\",\n      \"lock\": {\n        \"path\": \".claude/rules/release.md\",\n        \"hash\": \"sha256:1989d874184806e1dbaaed0a22a2beb6742fadefad3635eb685aaf9f12a751a8\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/release\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\",\n      \"lock\": {\n        \"path\": \".claude/rules/style.md\",\n        \"hash\": \"sha256:7d790d171042a1dcb276a0264789508fa082015ade6bc384b581397c26352459\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/style\"\n      }\n    },\n    {\n      \"path\": \".claude/scripts/lint.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"script/lint\",\n      \"lock\": {\n        \"path\": \".claude/scripts/lint.sh\",\n        \"hash\": \"sha256:b9e39e5da1306f5e61d64f88821cd0e00f1911498fccefeb680a98982cb0830c\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"script/lint\"\n      }\n    },\n    {\n      \"path\": \".claude/settings.craftar.example.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\",\n      \"lock\": {\n        \"path\": \".claude/settings.craftar.example.json\",\n        \"hash\": \"sha256:21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"mcp/*\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/deploy/run.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".claude/skills/deploy/run.sh\",\n        \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/deploy/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".claude/skills/deploy/SKILL.md\",\n        \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/docs.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/docs\",\n      \"lock\": {\n        \"path\": \".claude/skills/docs.md\",\n        \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/docs\"\n      }\n    },\n    {\n      \"path\": \".kiro/agents/helper.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/helper\",\n      \"lock\": {\n        \"path\": \".kiro/agents/helper.json\",\n        \"hash\": \"sha256:030622e0955c3e6681f5f56c305f7763e1a6bce1422e6e4aacfa7d44d1008e3d\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"agent/helper\"\n      }\n    },\n    {\n      \"path\": \".kiro/settings/mcp.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"mcp/*\",\n      \"lock\": {\n        \"path\": \".kiro/settings/mcp.json\",\n        \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"mcp/*\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/deploy/run.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".kiro/skills/deploy/run.sh\",\n        \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/deploy/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".kiro/skills/deploy/SKILL.md\",\n        \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/docs/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/docs\",\n      \"lock\": {\n        \"path\": \".kiro/skills/docs/SKILL.md\",\n        \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/docs\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".kiro/steering/api.md\",\n        \"hash\": \"sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/commands/review.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"command/review\",\n      \"lock\": {\n        \"path\": \".kiro/steering/commands/review.md\",\n        \"hash\": \"sha256:17fca98c3e14d73cfb32c02193aeff2ac89efbf1602ebaa8277d987295e20207\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"command/review\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/release.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/release\",\n      \"lock\": {\n        \"path\": \".kiro/steering/release.md\",\n        \"hash\": \"sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/release\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/style.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/style\",\n      \"lock\": {\n        \"path\": \".kiro/steering/style.md\",\n        \"hash\": \"sha256:01ff955e110b7589163b82fb715e70cb4b9637f1a0341a3050614a213660a943\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/style\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/tone.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"steering/tone\",\n      \"lock\": {\n        \"path\": \".kiro/steering/tone.md\",\n        \"hash\": \"sha256:b516f3124243bbf60573c364e628d9d81460f044f064eb082c6d03b270c95d5e\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"steering/tone\"\n      }\n    },\n    {\n      \"path\": \".mcp.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\",\n      \"lock\": {\n        \"path\": \".mcp.json\",\n        \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"mcp/*\"\n      }\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\",\n      \"lock\": {\n        \"path\": \"AGENTS.md\",\n        \"hash\": \"sha256:0d4e89aa278dd4d3a40024c7f678afa0119340873dc883f7b143150ae5135a5c\",\n        \"target\": \"agents-md\",\n        \"ingredient\": \"rule/*\"\n      }\n    }\n  ],\n  \"warnings\": [\n    \"claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\",\n    \"kiro: hook hook/guard-path has no Kiro equivalent — skipped\",\n    \"agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\",\n    \"agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\",\n    \"agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs\",\n    \"agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker\",\n    \"agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path\"\n  ],\n  \"unsetParams\": []\n}\n",
+      "stderr": ""
+    },
+    "diff": {
+      "code": 0,
+      "stdout": "no differences\n",
+      "stderr": ""
+    },
+    "targets": {
+      "code": 0,
+      "stdout": "{\n  \"ingredientTypes\": [\n    \"rule\",\n    \"agent\",\n    \"command\",\n    \"skill\",\n    \"mcp\",\n    \"script\",\n    \"steering\",\n    \"hook\",\n    \"service\"\n  ],\n  \"targets\": [\n    {\n      \"name\": \"claude-code\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/rules/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"agent\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/agents/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"command\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/commands/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"skill\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/skills/<name>/<file>\",\n            \".claude/skills/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".mcp.json\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/scripts/<file>\"\n          ],\n          \"note\": null\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/hooks/<file>\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": \"the registration is written to .claude/settings.craftar.example.json, to copy\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"kiro\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": \"inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)\"\n        },\n        \"agent\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/agents/<name>.json\"\n          ],\n          \"note\": \"written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files\"\n        },\n        \"command\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/commands/<name>.md\"\n          ],\n          \"note\": \"written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description\"\n        },\n        \"skill\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/skills/<name>/<file>\"\n          ],\n          \"note\": \"in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md\"\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/settings/mcp.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"agents-md\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \"AGENTS.md\"\n          ],\n          \"note\": \"always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning\"\n        },\n        \"agent\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"command\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"skill\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"mcp\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    }\n  ],\n  \"warnings\": []\n}\n",
+      "stderr": ""
+    },
+    "doctorWorkspace": [
+      {
+        "id": "config",
+        "level": "ok",
+        "message": "craftar.yaml loads (forge ../forge, profile acme)",
+        "fix": null
+      },
+      {
+        "id": "forge",
+        "level": "ok",
+        "message": "../forge @ no git",
+        "fix": null
+      },
+      {
+        "id": "forge-inside",
+        "level": "ok",
+        "message": "outside the Forge",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "kiro: hook hook/guard-path has no Kiro equivalent — skipped",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path",
+        "fix": null
+      },
+      {
+        "id": "params",
+        "level": "ok",
+        "message": "every declared parameter has a value",
+        "fix": null
+      },
+      {
+        "id": "agents-md-size",
+        "level": "ok",
+        "message": "AGENTS.md is 481 bytes, within the budget of 32768",
+        "fix": null
+      },
+      {
+        "id": "mcp-env",
+        "level": "warn",
+        "message": "server \"tracker\" expects ACME_TOKEN, not set",
+        "fix": "export ACME_TOKEN"
+      },
+      {
+        "id": "mcp-launcher",
+        "level": "ok",
+        "message": "no written MCP server is Windows-only",
+        "fix": null
+      },
+      {
+        "id": "hooks-registered",
+        "level": "warn",
+        "message": "hook/guard-path: registration 0 (PreToolUse) is in no settings file Claude Code reads",
+        "fix": "run craftar settings apply (or copy it from .claude/settings.craftar.example.json into .claude/settings.json)"
+      },
+      {
+        "id": "skill-layout",
+        "level": "warn",
+        "message": ".claude/skills/docs.md is a skill Claude Code does not list",
+        "fix": "set layout: dir in ingredients/skills/docs/ingredient.yaml — sync then writes .claude/skills/docs/SKILL.md"
+      },
+      {
+        "id": "skill-trigger",
+        "level": "warn",
+        "message": "skill deploy: its description does not say when to use it, so the agent does not load it by itself",
+        "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+      },
+      {
+        "id": "skill-trigger",
+        "level": "warn",
+        "message": "skill docs: its description does not say when to use it, so the agent does not load it by itself",
+        "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+      },
+      {
+        "id": "lock",
+        "level": "ok",
+        "message": "schema 2, generated <timestamp>",
+        "fix": null
+      },
+      {
+        "id": "status",
+        "level": "ok",
+        "message": "up to date",
+        "fix": null
+      },
+      {
+        "id": "registered",
+        "level": "ok",
+        "message": "in the registry",
+        "fix": null
+      }
+    ],
+    "doctorExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/api.md\n  target      claude-code\n  ingredient  rule/api\n  via recipes base\n  profile     acme  (recipes: base)\n  hash        sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\n",
+      "stderr": ""
+    }
+  },
+  "primary": {
+    "plan": {
+      "files": [
+        {
+          "path": ".claude/agents/helper.md",
+          "target": "claude-code",
+          "ingredient": "agent/helper",
+          "sha256": "sha256:652e846f8d797202bcd1417c6fa0ab0fa6edc53bbcc3fd63131e68054e5d6ee1",
+          "text": "---\nname: helper\ndescription: Helps with tasks\ntools: \n---\nHelp the user with their tasks.\n"
+        },
+        {
+          "path": ".claude/commands/review.md",
+          "target": "claude-code",
+          "ingredient": "command/review",
+          "sha256": "sha256:64f688bfa2f5941eb0df7b48af2bc7fa5c4ef49ce945669e5753cdbec0f11383",
+          "text": "---\ndescription: Run a code review\n---\nRun a code review on the current changes.\n"
+        },
+        {
+          "path": ".claude/hooks/guard-path.py",
+          "target": "claude-code",
+          "ingredient": "hook/guard-path",
+          "sha256": "sha256:3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172",
+          "text": "print(\"ok\")\n"
+        },
+        {
+          "path": ".claude/rules/api.md",
+          "target": "claude-code",
+          "ingredient": "rule/api",
+          "sha256": "sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9",
+          "text": "# API\nEvery endpoint is RESTful.\n"
+        },
+        {
+          "path": ".claude/rules/release.md",
+          "target": "claude-code",
+          "ingredient": "rule/release",
+          "sha256": "sha256:1989d874184806e1dbaaed0a22a2beb6742fadefad3635eb685aaf9f12a751a8",
+          "text": "# Release\nTag after review.\n"
+        },
+        {
+          "path": ".claude/scripts/lint.sh",
+          "target": "claude-code",
+          "ingredient": "script/lint",
+          "sha256": "sha256:b9e39e5da1306f5e61d64f88821cd0e00f1911498fccefeb680a98982cb0830c",
+          "text": "#!/bin/sh\necho linting\nexit 0\n"
+        },
+        {
+          "path": ".claude/settings.craftar.example.json",
+          "target": "claude-code",
+          "ingredient": "mcp/*",
+          "sha256": "sha256:21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb",
+          "text": "{\n  \"env\": {\n    \"ACME_TOKEN\": \"\"\n  },\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash|PowerShell\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"python3\",\n            \"args\": [\n              \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-path.py\"\n            ],\n            \"timeout\": 10\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+        },
+        {
+          "path": ".claude/skills/deploy/run.sh",
+          "target": "claude-code",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561",
+          "text": "#!/bin/sh\necho deploying\n"
+        },
+        {
+          "path": ".claude/skills/deploy/SKILL.md",
+          "target": "claude-code",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f",
+          "text": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n"
+        },
+        {
+          "path": ".claude/skills/docs.md",
+          "target": "claude-code",
+          "ingredient": "skill/docs",
+          "sha256": "sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683",
+          "text": "---\nname: docs\ndescription: Generate documentation\n---\nGenerate docs.\n"
+        },
+        {
+          "path": ".kiro/agents/helper.json",
+          "target": "kiro",
+          "ingredient": "agent/helper",
+          "sha256": "sha256:030622e0955c3e6681f5f56c305f7763e1a6bce1422e6e4aacfa7d44d1008e3d",
+          "text": "{\n  \"name\": \"helper\",\n  \"description\": \"Helps with tasks\",\n  \"prompt\": \"Help the user with their tasks.\",\n  \"tools\": [],\n  \"allowedTools\": [],\n  \"resources\": [\n    \"file://.kiro/steering/**/*.md\"\n  ],\n  \"permissions\": {\n    \"rules\": [\n      {\n        \"capability\": \"fs_read\",\n        \"match\": [\n          \"./**\"\n        ],\n        \"effect\": \"allow\"\n      }\n    ]\n  }\n}\n"
+        },
+        {
+          "path": ".kiro/settings/mcp.json",
+          "target": "kiro",
+          "ingredient": "mcp/*",
+          "sha256": "sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e",
+          "text": "{\n  \"mcpServers\": {\n    \"tracker\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"acme-tracker\"\n      ],\n      \"env\": {\n        \"ACME_ORG\": \"acme\"\n      }\n    }\n  }\n}\n"
+        },
+        {
+          "path": ".kiro/skills/deploy/run.sh",
+          "target": "kiro",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561",
+          "text": "#!/bin/sh\necho deploying\n"
+        },
+        {
+          "path": ".kiro/skills/deploy/SKILL.md",
+          "target": "kiro",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f",
+          "text": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n"
+        },
+        {
+          "path": ".kiro/skills/docs/SKILL.md",
+          "target": "kiro",
+          "ingredient": "skill/docs",
+          "sha256": "sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683",
+          "text": "---\nname: docs\ndescription: Generate documentation\n---\nGenerate docs.\n"
+        },
+        {
+          "path": ".kiro/steering/api.md",
+          "target": "kiro",
+          "ingredient": "rule/api",
+          "sha256": "sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c",
+          "text": "---\ninclusion: fileMatch\nfileMatchPattern: \"src/api/**\"\n---\n\n<!-- GENERATED from .claude/rules/api.md by craftar -- do not edit. -->\n\n# API\nEvery endpoint is RESTful.\n"
+        },
+        {
+          "path": ".kiro/steering/commands/review.md",
+          "target": "kiro",
+          "ingredient": "command/review",
+          "sha256": "sha256:17fca98c3e14d73cfb32c02193aeff2ac89efbf1602ebaa8277d987295e20207",
+          "text": "---\ninclusion: manual\n---\n\n---\ndescription: Run a code review\n---\nRun a code review on the current changes.\n"
+        },
+        {
+          "path": ".kiro/steering/release.md",
+          "target": "kiro",
+          "ingredient": "rule/release",
+          "sha256": "sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3",
+          "text": "---\ninclusion: manual\n---\n\n<!-- GENERATED from .claude/rules/release.md by craftar -- do not edit. -->\n\n# Release\nTag after review.\n"
+        },
+        {
+          "path": ".kiro/steering/tone.md",
+          "target": "kiro",
+          "ingredient": "steering/tone",
+          "sha256": "sha256:b516f3124243bbf60573c364e628d9d81460f044f064eb082c6d03b270c95d5e",
+          "text": "# Tone\nBe friendly and clear.\n"
+        },
+        {
+          "path": ".mcp.json",
+          "target": "claude-code",
+          "ingredient": "mcp/*",
+          "sha256": "sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e",
+          "text": "{\n  \"mcpServers\": {\n    \"tracker\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"acme-tracker\"\n      ],\n      \"env\": {\n        \"ACME_ORG\": \"acme\"\n      }\n    }\n  }\n}\n"
+        },
+        {
+          "path": "AGENTS.md",
+          "target": "agents-md",
+          "ingredient": "rule/*",
+          "sha256": "sha256:0d4e89aa278dd4d3a40024c7f678afa0119340873dc883f7b143150ae5135a5c",
+          "text": "<!-- GENERATED by craftar from the Forge. Edit the rule ingredients, not this file. -->\n\n# AGENTS.md — acme\n\nConventions for coding agents working in this workspace. Sections below are the always-on rules;\nscoped rules are listed at the end with the paths they apply to.\n\n<!-- rule: style -->\n# Style\nUse consistent formatting.\nSee .claude/rules/api.md for API rules.\n\n## Scoped rules\n\n- `.claude/rules/api.md` — applies to `src/api/**`\n- `.claude/rules/release.md` — manual\n"
+        }
+      ],
+      "warnings": [
+        "claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml",
+        "kiro: hook hook/guard-path has no Kiro equivalent — skipped",
+        "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper",
+        "agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review",
+        "agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs",
+        "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker",
+        "agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path"
+      ]
+    },
+    "sync": {
+      "code": 0,
+      "stdout": "craftar sync — profile acme · recipes base · targets claude-code, kiro, agents-md\n  wrote 21, removed 0 orphan(s), skipped 0\n  + .claude/agents/helper.md\n  + .claude/commands/review.md\n  + .claude/hooks/guard-path.py\n  + .claude/rules/api.md\n  + .claude/rules/release.md\n  + .claude/scripts/lint.sh\n  + .claude/settings.craftar.example.json\n  + .claude/skills/deploy/run.sh\n  + .claude/skills/deploy/SKILL.md\n  + .claude/skills/docs.md\n  + .kiro/agents/helper.json\n  + .kiro/settings/mcp.json\n  + .kiro/skills/deploy/run.sh\n  + .kiro/skills/deploy/SKILL.md\n  + .kiro/skills/docs/SKILL.md\n  + .kiro/steering/api.md\n  + .kiro/steering/commands/review.md\n  + .kiro/steering/release.md\n  + .kiro/steering/tone.md\n  + .mcp.json\n  + AGENTS.md\n  warn claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\n  warn kiro: hook hook/guard-path has no Kiro equivalent — skipped\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\n  warn agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\n  warn agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs\n  warn agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker\n  warn agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path\n",
+      "stderr": ""
+    },
+    "lock": "{\n  \"schema\": 2,\n  \"forge\": {\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"commit\": null\n  },\n  \"profile\": \"acme\",\n  \"recipes\": [\n    \"base\"\n  ],\n  \"targets\": [\n    \"claude-code\",\n    \"kiro\",\n    \"agents-md\"\n  ],\n  \"generatedAt\": \"<timestamp>\",\n  \"files\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"hash\": \"sha256:652e846f8d797202bcd1417c6fa0ab0fa6edc53bbcc3fd63131e68054e5d6ee1\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\"\n    },\n    {\n      \"path\": \".claude/commands/review.md\",\n      \"hash\": \"sha256:64f688bfa2f5941eb0df7b48af2bc7fa5c4ef49ce945669e5753cdbec0f11383\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"command/review\"\n    },\n    {\n      \"path\": \".claude/hooks/guard-path.py\",\n      \"hash\": \"sha256:3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"hook/guard-path\"\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"hash\": \"sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".claude/rules/release.md\",\n      \"hash\": \"sha256:1989d874184806e1dbaaed0a22a2beb6742fadefad3635eb685aaf9f12a751a8\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/release\"\n    },\n    {\n      \"path\": \".claude/scripts/lint.sh\",\n      \"hash\": \"sha256:b9e39e5da1306f5e61d64f88821cd0e00f1911498fccefeb680a98982cb0830c\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"script/lint\"\n    },\n    {\n      \"path\": \".claude/settings.craftar.example.json\",\n      \"hash\": \"sha256:21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\"\n    },\n    {\n      \"path\": \".claude/skills/deploy/run.sh\",\n      \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".claude/skills/deploy/SKILL.md\",\n      \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".claude/skills/docs.md\",\n      \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/docs\"\n    },\n    {\n      \"path\": \".kiro/agents/helper.json\",\n      \"hash\": \"sha256:030622e0955c3e6681f5f56c305f7763e1a6bce1422e6e4aacfa7d44d1008e3d\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/helper\"\n    },\n    {\n      \"path\": \".kiro/settings/mcp.json\",\n      \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"mcp/*\"\n    },\n    {\n      \"path\": \".kiro/skills/deploy/run.sh\",\n      \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".kiro/skills/deploy/SKILL.md\",\n      \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".kiro/skills/docs/SKILL.md\",\n      \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/docs\"\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"hash\": \"sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".kiro/steering/commands/review.md\",\n      \"hash\": \"sha256:17fca98c3e14d73cfb32c02193aeff2ac89efbf1602ebaa8277d987295e20207\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"command/review\"\n    },\n    {\n      \"path\": \".kiro/steering/release.md\",\n      \"hash\": \"sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/release\"\n    },\n    {\n      \"path\": \".kiro/steering/tone.md\",\n      \"hash\": \"sha256:b516f3124243bbf60573c364e628d9d81460f044f064eb082c6d03b270c95d5e\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"steering/tone\"\n    },\n    {\n      \"path\": \".mcp.json\",\n      \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\"\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"hash\": \"sha256:0d4e89aa278dd4d3a40024c7f678afa0119340873dc883f7b143150ae5135a5c\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\"\n    }\n  ]\n}\n",
+    "syncCheck": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base\n  unchanged 21\n  warn claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\n  warn kiro: hook hook/guard-path has no Kiro equivalent — skipped\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\n  warn agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\n  warn agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs\n  warn agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker\n  warn agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path\n\nworkspace in sync\n",
+      "stderr": ""
+    },
+    "status": {
+      "code": 0,
+      "stdout": "{\n  \"forge\": {\n    \"kind\": \"path\",\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"defaultBranch\": null,\n    \"commit\": null,\n    \"lockCommit\": null,\n    \"fetched\": false\n  },\n  \"statuses\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\",\n      \"lock\": {\n        \"path\": \".claude/agents/helper.md\",\n        \"hash\": \"sha256:652e846f8d797202bcd1417c6fa0ab0fa6edc53bbcc3fd63131e68054e5d6ee1\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"agent/helper\"\n      }\n    },\n    {\n      \"path\": \".claude/commands/review.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"command/review\",\n      \"lock\": {\n        \"path\": \".claude/commands/review.md\",\n        \"hash\": \"sha256:64f688bfa2f5941eb0df7b48af2bc7fa5c4ef49ce945669e5753cdbec0f11383\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"command/review\"\n      }\n    },\n    {\n      \"path\": \".claude/hooks/guard-path.py\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"hook/guard-path\",\n      \"lock\": {\n        \"path\": \".claude/hooks/guard-path.py\",\n        \"hash\": \"sha256:3a66aebdedbad3cf107d24e72a07d4b735819b1cf4020fdd922f63c064708172\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"hook/guard-path\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".claude/rules/api.md\",\n        \"hash\": \"sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/release.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/release\",\n      \"lock\": {\n        \"path\": \".claude/rules/release.md\",\n        \"hash\": \"sha256:1989d874184806e1dbaaed0a22a2beb6742fadefad3635eb685aaf9f12a751a8\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/release\"\n      }\n    },\n    {\n      \"path\": \".claude/scripts/lint.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"script/lint\",\n      \"lock\": {\n        \"path\": \".claude/scripts/lint.sh\",\n        \"hash\": \"sha256:b9e39e5da1306f5e61d64f88821cd0e00f1911498fccefeb680a98982cb0830c\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"script/lint\"\n      }\n    },\n    {\n      \"path\": \".claude/settings.craftar.example.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\",\n      \"lock\": {\n        \"path\": \".claude/settings.craftar.example.json\",\n        \"hash\": \"sha256:21658ef562690c1a3110e3295716924577302f40ac349a2862edb4357adc7eeb\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"mcp/*\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/deploy/run.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".claude/skills/deploy/run.sh\",\n        \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/deploy/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".claude/skills/deploy/SKILL.md\",\n        \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/docs.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/docs\",\n      \"lock\": {\n        \"path\": \".claude/skills/docs.md\",\n        \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/docs\"\n      }\n    },\n    {\n      \"path\": \".kiro/agents/helper.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/helper\",\n      \"lock\": {\n        \"path\": \".kiro/agents/helper.json\",\n        \"hash\": \"sha256:030622e0955c3e6681f5f56c305f7763e1a6bce1422e6e4aacfa7d44d1008e3d\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"agent/helper\"\n      }\n    },\n    {\n      \"path\": \".kiro/settings/mcp.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"mcp/*\",\n      \"lock\": {\n        \"path\": \".kiro/settings/mcp.json\",\n        \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"mcp/*\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/deploy/run.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".kiro/skills/deploy/run.sh\",\n        \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/deploy/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".kiro/skills/deploy/SKILL.md\",\n        \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/docs/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/docs\",\n      \"lock\": {\n        \"path\": \".kiro/skills/docs/SKILL.md\",\n        \"hash\": \"sha256:7f0b7c00fd5813bf7a4b382ac26c2a446329221059233ecd60789cd29ed2f683\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/docs\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".kiro/steering/api.md\",\n        \"hash\": \"sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/commands/review.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"command/review\",\n      \"lock\": {\n        \"path\": \".kiro/steering/commands/review.md\",\n        \"hash\": \"sha256:17fca98c3e14d73cfb32c02193aeff2ac89efbf1602ebaa8277d987295e20207\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"command/review\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/release.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/release\",\n      \"lock\": {\n        \"path\": \".kiro/steering/release.md\",\n        \"hash\": \"sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/release\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/tone.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"steering/tone\",\n      \"lock\": {\n        \"path\": \".kiro/steering/tone.md\",\n        \"hash\": \"sha256:b516f3124243bbf60573c364e628d9d81460f044f064eb082c6d03b270c95d5e\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"steering/tone\"\n      }\n    },\n    {\n      \"path\": \".mcp.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"mcp/*\",\n      \"lock\": {\n        \"path\": \".mcp.json\",\n        \"hash\": \"sha256:386004ac503e06a058621a91a5890231601990a98d48f2964d178aaa07612e3e\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"mcp/*\"\n      }\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\",\n      \"lock\": {\n        \"path\": \"AGENTS.md\",\n        \"hash\": \"sha256:0d4e89aa278dd4d3a40024c7f678afa0119340873dc883f7b143150ae5135a5c\",\n        \"target\": \"agents-md\",\n        \"ingredient\": \"rule/*\"\n      }\n    }\n  ],\n  \"warnings\": [\n    \"claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\",\n    \"kiro: hook hook/guard-path has no Kiro equivalent — skipped\",\n    \"agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\",\n    \"agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\",\n    \"agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs\",\n    \"agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker\",\n    \"agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path\"\n  ],\n  \"unsetParams\": []\n}\n",
+      "stderr": ""
+    },
+    "diff": {
+      "code": 0,
+      "stdout": "no differences\n",
+      "stderr": ""
+    },
+    "targets": {
+      "code": 0,
+      "stdout": "{\n  \"ingredientTypes\": [\n    \"rule\",\n    \"agent\",\n    \"command\",\n    \"skill\",\n    \"mcp\",\n    \"script\",\n    \"steering\",\n    \"hook\",\n    \"service\"\n  ],\n  \"targets\": [\n    {\n      \"name\": \"claude-code\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/rules/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"agent\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/agents/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"command\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/commands/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"skill\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/skills/<name>/<file>\",\n            \".claude/skills/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".mcp.json\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/scripts/<file>\"\n          ],\n          \"note\": null\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/hooks/<file>\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": \"the registration is written to .claude/settings.craftar.example.json, to copy\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"kiro\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": \"inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)\"\n        },\n        \"agent\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/agents/<name>.json\"\n          ],\n          \"note\": \"written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files\"\n        },\n        \"command\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/commands/<name>.md\"\n          ],\n          \"note\": \"written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description\"\n        },\n        \"skill\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/skills/<name>/<file>\"\n          ],\n          \"note\": \"in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md\"\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/settings/mcp.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"agents-md\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \"AGENTS.md\"\n          ],\n          \"note\": \"always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning\"\n        },\n        \"agent\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"command\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"skill\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"mcp\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    }\n  ],\n  \"warnings\": []\n}\n",
+      "stderr": ""
+    },
+    "doctorWorkspace": [
+      {
+        "id": "config",
+        "level": "ok",
+        "message": "craftar.yaml loads (forge ../forge, profile acme)",
+        "fix": null
+      },
+      {
+        "id": "forge",
+        "level": "ok",
+        "message": "../forge @ no git",
+        "fix": null
+      },
+      {
+        "id": "forge-inside",
+        "level": "ok",
+        "message": "outside the Forge",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "kiro: hook hook/guard-path has no Kiro equivalent — skipped",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 2 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy, skill/docs",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/tracker",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/guard-path",
+        "fix": null
+      },
+      {
+        "id": "params",
+        "level": "ok",
+        "message": "every declared parameter has a value",
+        "fix": null
+      },
+      {
+        "id": "agents-md-size",
+        "level": "ok",
+        "message": "AGENTS.md is 481 bytes, within the budget of 32768",
+        "fix": null
+      },
+      {
+        "id": "agents-md-primary",
+        "level": "ok",
+        "message": "nothing keeps Claude Code from reading AGENTS.md",
+        "fix": null
+      },
+      {
+        "id": "kiro-resources",
+        "level": "ok",
+        "message": "every checked Kiro resource is written by the plan",
+        "fix": null
+      },
+      {
+        "id": "mcp-env",
+        "level": "warn",
+        "message": "server \"tracker\" expects ACME_TOKEN, not set",
+        "fix": "export ACME_TOKEN"
+      },
+      {
+        "id": "mcp-launcher",
+        "level": "ok",
+        "message": "no written MCP server is Windows-only",
+        "fix": null
+      },
+      {
+        "id": "hooks-registered",
+        "level": "warn",
+        "message": "hook/guard-path: registration 0 (PreToolUse) is in no settings file Claude Code reads",
+        "fix": "run craftar settings apply (or copy it from .claude/settings.craftar.example.json into .claude/settings.json)"
+      },
+      {
+        "id": "skill-layout",
+        "level": "warn",
+        "message": ".claude/skills/docs.md is a skill Claude Code does not list",
+        "fix": "set layout: dir in ingredients/skills/docs/ingredient.yaml — sync then writes .claude/skills/docs/SKILL.md"
+      },
+      {
+        "id": "skill-trigger",
+        "level": "warn",
+        "message": "skill deploy: its description does not say when to use it, so the agent does not load it by itself",
+        "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+      },
+      {
+        "id": "skill-trigger",
+        "level": "warn",
+        "message": "skill docs: its description does not say when to use it, so the agent does not load it by itself",
+        "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+      },
+      {
+        "id": "lock",
+        "level": "ok",
+        "message": "schema 2, generated <timestamp>",
+        "fix": null
+      },
+      {
+        "id": "status",
+        "level": "ok",
+        "message": "up to date",
+        "fix": null
+      },
+      {
+        "id": "registered",
+        "level": "ok",
+        "message": "in the registry",
+        "fix": null
+      }
+    ],
+    "doctorExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/api.md\n  target      claude-code\n  ingredient  rule/api\n  via recipes base\n  profile     acme  (recipes: base)\n  hash        sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\n",
+      "stderr": ""
+    },
+    "explainPrimary": {
+      "code": 1,
+      "stdout": "",
+      "stderr": "error: .claude/rules/style.md is not produced by the Forge for profile acme\n"
+    }
+  },
+  "target-sections": {
+    "plan": {
+      "files": [
+        {
+          "path": ".claude/agents/api-reviewer.md",
+          "target": "claude-code",
+          "ingredient": "agent/api-reviewer",
+          "sha256": "sha256:ed28146c205dc5da9bc522ad55313edacae28e755670da5a83e415e6fe89d636",
+          "text": "---\nname: api-reviewer\ndescription: Reviews API changes\ntools: \n---\nReview API changes.\n\n- Check naming\n- Check docs\n\nBe thorough.\n"
+        },
+        {
+          "path": ".claude/commands/review.md",
+          "target": "claude-code",
+          "ingredient": "command/review",
+          "sha256": "sha256:1957e79ea021e813a5c1bb498caec099cf8706639ae69e6e4999769fe570064c",
+          "text": "---\ndescription: Run a review\n---\nRun a code review.\n\n1. Read the diff\n2. Comment\n"
+        },
+        {
+          "path": ".claude/rules/api.md",
+          "target": "claude-code",
+          "ingredient": "rule/api",
+          "sha256": "sha256:f7e2cbdf426712fd4d3e56c99a9141b654a5b806a17e112c51efc05237c5f4d6",
+          "text": "# API Rules\n\nEvery endpoint follows the style guide.\n\nEndpoint base: /api/v2\n\nDocument everything.\n"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "target": "claude-code",
+          "ingredient": "rule/style",
+          "sha256": "sha256:180c67ee92e4f8567266b91f8f185d4bd047e21f33945a8925969cdd3670d9db",
+          "text": "Default intro text.\n\n# Style Guide\n\nWrite plain English.\n\n| Lang | Style |\n|---|---|\n| en | UK |\n| pt | BR |\n\nFollow these rules.\n\nDefault notes.\n"
+        },
+        {
+          "path": ".claude/rules/tone.md",
+          "target": "claude-code",
+          "ingredient": "rule/tone",
+          "sha256": "sha256:8776790956ac5f5fe9aa7c934697167758a07190b9add71256a600ca6e3b7add",
+          "text": "# Tone\n\nBe friendly.\n"
+        },
+        {
+          "path": ".claude/skills/docs.md",
+          "target": "claude-code",
+          "ingredient": "skill/docs",
+          "sha256": "sha256:bde4c4294331abbf4dcdd314b8fbda6e1fe8d27d7b5880f12095e4e99eead126",
+          "text": "---\nname: docs\ndescription: Generate documentation\n---\nGenerate docs.\n\nUse Markdown.\n"
+        },
+        {
+          "path": ".craftar/.gitattributes",
+          "target": "services",
+          "ingredient": "service/*",
+          "sha256": "sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+          "text": "* -text\n"
+        },
+        {
+          "path": ".craftar/compose.yaml",
+          "target": "services",
+          "ingredient": "service/*",
+          "sha256": "sha256:b77dbc84c68691bc9c0880a56062cfddfd7dd67e96fd75eb2e2253a5f326b87f",
+          "text": "# Generated by craftar from the Forge — do not edit; change the service ingredient and run `craftar sync`.\ninclude:\n  - path: services/echo/compose.yaml\n"
+        },
+        {
+          "path": ".craftar/services/echo/compose.yaml",
+          "target": "services",
+          "ingredient": "service/echo",
+          "sha256": "sha256:3c07650a0cea712e0bba05e0091aa697a185090865b573b2587da71b151fc04d",
+          "text": "services:\n  echo:\n    image: example/echo:1\n    environment:\n      GREETING: hello\n"
+        },
+        {
+          "path": ".kiro/agents/api-reviewer.json",
+          "target": "kiro",
+          "ingredient": "agent/api-reviewer",
+          "sha256": "sha256:ebf30c20f09391385b84e2ebae7f932545d8109dd363cb57b919bb67a3edc7b4",
+          "text": "{\n  \"name\": \"api-reviewer\",\n  \"description\": \"Reviews API changes\",\n  \"prompt\": \"Review API changes.\\n\\n- Check naming\\n- Check docs\\n\\nBe thorough.\",\n  \"tools\": [],\n  \"allowedTools\": [],\n  \"resources\": [\n    \"file://.kiro/steering/api.md\"\n  ],\n  \"permissions\": {\n    \"rules\": [\n      {\n        \"capability\": \"fs_read\",\n        \"match\": [\n          \"./**\"\n        ],\n        \"effect\": \"allow\"\n      }\n    ]\n  }\n}\n"
+        },
+        {
+          "path": ".kiro/skills/docs/SKILL.md",
+          "target": "kiro",
+          "ingredient": "skill/docs",
+          "sha256": "sha256:bde4c4294331abbf4dcdd314b8fbda6e1fe8d27d7b5880f12095e4e99eead126",
+          "text": "---\nname: docs\ndescription: Generate documentation\n---\nGenerate docs.\n\nUse Markdown.\n"
+        },
+        {
+          "path": ".kiro/steering/api.md",
+          "target": "kiro",
+          "ingredient": "rule/api",
+          "sha256": "sha256:f1e4094685cf2d8c17846a5d0bb20508eead4c9c53bcfc1d7cad9af85d2d46b6",
+          "text": "---\ninclusion: fileMatch\nfileMatchPattern: \"src/api/**\"\n---\n\n<!-- GENERATED from .claude/rules/api.md by craftar -- do not edit. -->\n\n# API Rules\n\nEvery endpoint follows the style guide.\n\nEndpoint base: /api/v2\n\nDocument everything.\n"
+        },
+        {
+          "path": ".kiro/steering/commands/review.md",
+          "target": "kiro",
+          "ingredient": "command/review",
+          "sha256": "sha256:0f659ce6e1e8314964b942342d6e4ad6fd06f076e6be59b4290ff89ec1114219",
+          "text": "---\ninclusion: manual\n---\n\n---\ndescription: Run a review\n---\nRun a code review.\n\n1. Read the diff\n2. Comment\n"
+        },
+        {
+          "path": ".kiro/steering/style.md",
+          "target": "kiro",
+          "ingredient": "rule/style",
+          "sha256": "sha256:7e50e900b2cc2dced3adf8831735472250fc2ea1cd25eedc9dbdad497d85b8f8",
+          "text": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/style.md by craftar -- do not edit. -->\n\nDefault intro text.\n\n# Style Guide\n\nWrite plain English.\n\n| Lang | Style |\n|---|---|\n| en | UK |\n| pt | BR |\n\nFollow these rules.\n\nDefault notes.\n"
+        },
+        {
+          "path": ".kiro/steering/tone.md",
+          "target": "kiro",
+          "ingredient": "rule/tone",
+          "sha256": "sha256:10c74fb46649f9c527fa6c401ca9d4700887704415454e5b23b3f85813d7a742",
+          "text": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/tone.md by craftar -- do not edit. -->\n\n# Tone\n\n"
+        },
+        {
+          "path": "AGENTS.md",
+          "target": "agents-md",
+          "ingredient": "rule/*",
+          "sha256": "sha256:6a133d55361e94371450552ba9cf1ca3a436848d4526eae79224cefbf10afeaa",
+          "text": "<!-- GENERATED by craftar from the Forge. Edit the rule ingredients, not this file. -->\n\n# AGENTS.md — acme\n\nConventions for coding agents working in this workspace. Sections below are the always-on rules;\nscoped rules are listed at the end with the paths they apply to.\n\n<!-- rule: style -->\nDefault intro text.\n\n# Style Guide\n\nWrite plain English.\n\n| Lang | Style |\n|---|---|\n| en | UK |\n| pt | BR |\n\nFollow these rules.\n\nDefault notes.\n\n<!-- rule: tone -->\n# Tone\n\n## Scoped rules\n\n- `.claude/rules/api.md` — applies to `src/api/**`\n"
+        }
+      ],
+      "warnings": [
+        "claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml",
+        "agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review",
+        "agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/docs",
+        "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/api-reviewer"
+      ]
+    },
+    "sync": {
+      "code": 0,
+      "stdout": "craftar sync — profile acme · recipes base → stack-api → acme-services · targets claude-code, kiro, agents-md\n  wrote 16, removed 0 orphan(s), skipped 0\n  + .claude/agents/api-reviewer.md\n  + .claude/commands/review.md\n  + .claude/rules/api.md\n  + .claude/rules/style.md\n  + .claude/rules/tone.md\n  + .claude/skills/docs.md\n  + .craftar/.gitattributes\n  + .craftar/compose.yaml\n  + .craftar/services/echo/compose.yaml\n  + .kiro/agents/api-reviewer.json\n  + .kiro/skills/docs/SKILL.md\n  + .kiro/steering/api.md\n  + .kiro/steering/commands/review.md\n  + .kiro/steering/style.md\n  + .kiro/steering/tone.md\n  + AGENTS.md\n  warn claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\n  warn agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\n  warn agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/docs\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/api-reviewer\n",
+      "stderr": ""
+    },
+    "lock": "{\n  \"schema\": 3,\n  \"forge\": {\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"commit\": null\n  },\n  \"profile\": \"acme\",\n  \"recipes\": [\n    \"base\",\n    \"stack-api\",\n    \"acme-services\"\n  ],\n  \"targets\": [\n    \"claude-code\",\n    \"kiro\",\n    \"agents-md\"\n  ],\n  \"generatedAt\": \"<timestamp>\",\n  \"files\": [\n    {\n      \"path\": \".claude/agents/api-reviewer.md\",\n      \"hash\": \"sha256:ed28146c205dc5da9bc522ad55313edacae28e755670da5a83e415e6fe89d636\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/api-reviewer\"\n    },\n    {\n      \"path\": \".claude/commands/review.md\",\n      \"hash\": \"sha256:1957e79ea021e813a5c1bb498caec099cf8706639ae69e6e4999769fe570064c\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"command/review\"\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"hash\": \"sha256:f7e2cbdf426712fd4d3e56c99a9141b654a5b806a17e112c51efc05237c5f4d6\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"hash\": \"sha256:180c67ee92e4f8567266b91f8f185d4bd047e21f33945a8925969cdd3670d9db\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\"\n    },\n    {\n      \"path\": \".claude/rules/tone.md\",\n      \"hash\": \"sha256:8776790956ac5f5fe9aa7c934697167758a07190b9add71256a600ca6e3b7add\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/tone\"\n    },\n    {\n      \"path\": \".claude/skills/docs.md\",\n      \"hash\": \"sha256:bde4c4294331abbf4dcdd314b8fbda6e1fe8d27d7b5880f12095e4e99eead126\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/docs\"\n    },\n    {\n      \"path\": \".craftar/.gitattributes\",\n      \"hash\": \"sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da\",\n      \"target\": \"services\",\n      \"ingredient\": \"service/*\"\n    },\n    {\n      \"path\": \".craftar/compose.yaml\",\n      \"hash\": \"sha256:b77dbc84c68691bc9c0880a56062cfddfd7dd67e96fd75eb2e2253a5f326b87f\",\n      \"target\": \"services\",\n      \"ingredient\": \"service/*\"\n    },\n    {\n      \"path\": \".craftar/services/echo/compose.yaml\",\n      \"hash\": \"sha256:3c07650a0cea712e0bba05e0091aa697a185090865b573b2587da71b151fc04d\",\n      \"target\": \"services\",\n      \"ingredient\": \"service/echo\"\n    },\n    {\n      \"path\": \".kiro/agents/api-reviewer.json\",\n      \"hash\": \"sha256:ebf30c20f09391385b84e2ebae7f932545d8109dd363cb57b919bb67a3edc7b4\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/api-reviewer\"\n    },\n    {\n      \"path\": \".kiro/skills/docs/SKILL.md\",\n      \"hash\": \"sha256:bde4c4294331abbf4dcdd314b8fbda6e1fe8d27d7b5880f12095e4e99eead126\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/docs\"\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"hash\": \"sha256:f1e4094685cf2d8c17846a5d0bb20508eead4c9c53bcfc1d7cad9af85d2d46b6\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".kiro/steering/commands/review.md\",\n      \"hash\": \"sha256:0f659ce6e1e8314964b942342d6e4ad6fd06f076e6be59b4290ff89ec1114219\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"command/review\"\n    },\n    {\n      \"path\": \".kiro/steering/style.md\",\n      \"hash\": \"sha256:7e50e900b2cc2dced3adf8831735472250fc2ea1cd25eedc9dbdad497d85b8f8\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/style\"\n    },\n    {\n      \"path\": \".kiro/steering/tone.md\",\n      \"hash\": \"sha256:10c74fb46649f9c527fa6c401ca9d4700887704415454e5b23b3f85813d7a742\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/tone\"\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"hash\": \"sha256:6a133d55361e94371450552ba9cf1ca3a436848d4526eae79224cefbf10afeaa\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\"\n    }\n  ]\n}\n",
+    "syncCheck": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base → stack-api → acme-services\n  unchanged 16\n  warn claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\n  warn agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\n  warn agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/docs\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/api-reviewer\n\nworkspace in sync\n",
+      "stderr": ""
+    },
+    "status": {
+      "code": 0,
+      "stdout": "{\n  \"forge\": {\n    \"kind\": \"path\",\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"defaultBranch\": null,\n    \"commit\": null,\n    \"lockCommit\": null,\n    \"fetched\": false\n  },\n  \"statuses\": [\n    {\n      \"path\": \".claude/agents/api-reviewer.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/api-reviewer\",\n      \"lock\": {\n        \"path\": \".claude/agents/api-reviewer.md\",\n        \"hash\": \"sha256:ed28146c205dc5da9bc522ad55313edacae28e755670da5a83e415e6fe89d636\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"agent/api-reviewer\"\n      }\n    },\n    {\n      \"path\": \".claude/commands/review.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"command/review\",\n      \"lock\": {\n        \"path\": \".claude/commands/review.md\",\n        \"hash\": \"sha256:1957e79ea021e813a5c1bb498caec099cf8706639ae69e6e4999769fe570064c\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"command/review\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".claude/rules/api.md\",\n        \"hash\": \"sha256:f7e2cbdf426712fd4d3e56c99a9141b654a5b806a17e112c51efc05237c5f4d6\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\",\n      \"lock\": {\n        \"path\": \".claude/rules/style.md\",\n        \"hash\": \"sha256:180c67ee92e4f8567266b91f8f185d4bd047e21f33945a8925969cdd3670d9db\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/style\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/tone.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/tone\",\n      \"lock\": {\n        \"path\": \".claude/rules/tone.md\",\n        \"hash\": \"sha256:8776790956ac5f5fe9aa7c934697167758a07190b9add71256a600ca6e3b7add\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/tone\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/docs.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/docs\",\n      \"lock\": {\n        \"path\": \".claude/skills/docs.md\",\n        \"hash\": \"sha256:bde4c4294331abbf4dcdd314b8fbda6e1fe8d27d7b5880f12095e4e99eead126\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/docs\"\n      }\n    },\n    {\n      \"path\": \".craftar/.gitattributes\",\n      \"state\": \"unchanged\",\n      \"target\": \"services\",\n      \"ingredient\": \"service/*\",\n      \"lock\": {\n        \"path\": \".craftar/.gitattributes\",\n        \"hash\": \"sha256:705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da\",\n        \"target\": \"services\",\n        \"ingredient\": \"service/*\"\n      }\n    },\n    {\n      \"path\": \".craftar/compose.yaml\",\n      \"state\": \"unchanged\",\n      \"target\": \"services\",\n      \"ingredient\": \"service/*\",\n      \"lock\": {\n        \"path\": \".craftar/compose.yaml\",\n        \"hash\": \"sha256:b77dbc84c68691bc9c0880a56062cfddfd7dd67e96fd75eb2e2253a5f326b87f\",\n        \"target\": \"services\",\n        \"ingredient\": \"service/*\"\n      }\n    },\n    {\n      \"path\": \".craftar/services/echo/compose.yaml\",\n      \"state\": \"unchanged\",\n      \"target\": \"services\",\n      \"ingredient\": \"service/echo\",\n      \"lock\": {\n        \"path\": \".craftar/services/echo/compose.yaml\",\n        \"hash\": \"sha256:3c07650a0cea712e0bba05e0091aa697a185090865b573b2587da71b151fc04d\",\n        \"target\": \"services\",\n        \"ingredient\": \"service/echo\"\n      }\n    },\n    {\n      \"path\": \".kiro/agents/api-reviewer.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/api-reviewer\",\n      \"lock\": {\n        \"path\": \".kiro/agents/api-reviewer.json\",\n        \"hash\": \"sha256:ebf30c20f09391385b84e2ebae7f932545d8109dd363cb57b919bb67a3edc7b4\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"agent/api-reviewer\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/docs/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/docs\",\n      \"lock\": {\n        \"path\": \".kiro/skills/docs/SKILL.md\",\n        \"hash\": \"sha256:bde4c4294331abbf4dcdd314b8fbda6e1fe8d27d7b5880f12095e4e99eead126\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/docs\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".kiro/steering/api.md\",\n        \"hash\": \"sha256:f1e4094685cf2d8c17846a5d0bb20508eead4c9c53bcfc1d7cad9af85d2d46b6\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/commands/review.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"command/review\",\n      \"lock\": {\n        \"path\": \".kiro/steering/commands/review.md\",\n        \"hash\": \"sha256:0f659ce6e1e8314964b942342d6e4ad6fd06f076e6be59b4290ff89ec1114219\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"command/review\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/style.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/style\",\n      \"lock\": {\n        \"path\": \".kiro/steering/style.md\",\n        \"hash\": \"sha256:7e50e900b2cc2dced3adf8831735472250fc2ea1cd25eedc9dbdad497d85b8f8\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/style\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/tone.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/tone\",\n      \"lock\": {\n        \"path\": \".kiro/steering/tone.md\",\n        \"hash\": \"sha256:10c74fb46649f9c527fa6c401ca9d4700887704415454e5b23b3f85813d7a742\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/tone\"\n      }\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\",\n      \"lock\": {\n        \"path\": \"AGENTS.md\",\n        \"hash\": \"sha256:6a133d55361e94371450552ba9cf1ca3a436848d4526eae79224cefbf10afeaa\",\n        \"target\": \"agents-md\",\n        \"ingredient\": \"rule/*\"\n      }\n    }\n  ],\n  \"warnings\": [\n    \"claude-code: Claude Code does not list a skill written as one file — .claude/skills/docs.md; set layout: dir in each ingredient.yaml\",\n    \"agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review\",\n    \"agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/docs\",\n    \"agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/api-reviewer\"\n  ],\n  \"unsetParams\": []\n}\n",
+      "stderr": ""
+    },
+    "diff": {
+      "code": 0,
+      "stdout": "no differences\n",
+      "stderr": ""
+    },
+    "targets": {
+      "code": 0,
+      "stdout": "{\n  \"ingredientTypes\": [\n    \"rule\",\n    \"agent\",\n    \"command\",\n    \"skill\",\n    \"mcp\",\n    \"script\",\n    \"steering\",\n    \"hook\",\n    \"service\"\n  ],\n  \"targets\": [\n    {\n      \"name\": \"claude-code\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/rules/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"agent\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/agents/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"command\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/commands/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"skill\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/skills/<name>/<file>\",\n            \".claude/skills/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".mcp.json\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/scripts/<file>\"\n          ],\n          \"note\": null\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/hooks/<file>\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": \"the registration is written to .claude/settings.craftar.example.json, to copy\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"kiro\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": \"inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)\"\n        },\n        \"agent\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/agents/<name>.json\"\n          ],\n          \"note\": \"written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files\"\n        },\n        \"command\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/commands/<name>.md\"\n          ],\n          \"note\": \"written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description\"\n        },\n        \"skill\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/skills/<name>/<file>\"\n          ],\n          \"note\": \"in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md\"\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/settings/mcp.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"agents-md\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \"AGENTS.md\"\n          ],\n          \"note\": \"always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning\"\n        },\n        \"agent\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"command\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"skill\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"mcp\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    }\n  ],\n  \"warnings\": []\n}\n",
+      "stderr": ""
+    },
+    "doctorWorkspace": [
+      {
+        "id": "config",
+        "level": "ok",
+        "message": "craftar.yaml loads (forge ../forge, profile acme)",
+        "fix": null
+      },
+      {
+        "id": "forge",
+        "level": "ok",
+        "message": "../forge @ no git",
+        "fix": null
+      },
+      {
+        "id": "forge-inside",
+        "level": "ok",
+        "message": "outside the Forge",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 command ingredient(s) have no AGENTS.md equivalent — skipped: command/review",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/docs",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/api-reviewer",
+        "fix": null
+      },
+      {
+        "id": "params",
+        "level": "ok",
+        "message": "every declared parameter has a value",
+        "fix": null
+      },
+      {
+        "id": "agents-md-size",
+        "level": "ok",
+        "message": "AGENTS.md is 540 bytes, within the budget of 32768",
+        "fix": null
+      },
+      {
+        "id": "mcp-env",
+        "level": "ok",
+        "message": "every variable a written MCP server expects is set",
+        "fix": null
+      },
+      {
+        "id": "skill-layout",
+        "level": "warn",
+        "message": ".claude/skills/docs.md is a skill Claude Code does not list",
+        "fix": "set layout: dir in ingredients/skills/docs/ingredient.yaml — sync then writes .claude/skills/docs/SKILL.md"
+      },
+      {
+        "id": "skill-trigger",
+        "level": "warn",
+        "message": "skill docs: its description does not say when to use it, so the agent does not load it by itself",
+        "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+      },
+      {
+        "id": "docker",
+        "level": "warn",
+        "message": "docker not found",
+        "fix": "install Docker with the Compose plugin 2.20.0 or later"
+      },
+      {
+        "id": "services-env",
+        "level": "ok",
+        "message": "every variable a service fragment expects is set",
+        "fix": null
+      },
+      {
+        "id": "lock",
+        "level": "ok",
+        "message": "schema 3, generated <timestamp>",
+        "fix": null
+      },
+      {
+        "id": "status",
+        "level": "ok",
+        "message": "up to date",
+        "fix": null
+      },
+      {
+        "id": "registered",
+        "level": "ok",
+        "message": "in the registry",
+        "fix": null
+      }
+    ],
+    "doctorExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/api.md\n  target      claude-code\n  ingredient  rule/api\n  via recipes stack-api\n  sections    endpoints (default)\n  params      api.base (profile acme)\n  profile     acme  (recipes: base, stack-api, acme-services)\n  hash        sha256:f7e2cbdf426712fd4d3e56c99a9141b654a5b806a17e112c51efc05237c5f4d6\n",
+      "stderr": ""
+    }
+  },
+  "rules-index": {
+    "plan": {
+      "files": [
+        {
+          "path": ".claude/agents/helper.md",
+          "target": "claude-code",
+          "ingredient": "agent/helper",
+          "sha256": "sha256:62a1313b46be16a0e095612070ec87b1ae818c35ea0cb892b7e8e506ce93433c",
+          "text": "---\nname: helper\ntools: \n---\nHelp the user.\n\n{{craftar.rules.index}}\n"
+        },
+        {
+          "path": ".claude/rules/api.md",
+          "target": "claude-code",
+          "ingredient": "rule/api",
+          "sha256": "sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9",
+          "text": "# API\nEvery endpoint is RESTful.\n"
+        },
+        {
+          "path": ".claude/rules/readme.md",
+          "target": "claude-code",
+          "ingredient": "rule/readme",
+          "sha256": "sha256:f2ef2683037e86e4eb5d6ab0c725231b6a859a8f7312f8c2edd22b01e512b2e4",
+          "text": "# Rules\n\nAlways on:\n- `.claude/rules/readme.md` — Index of the rules\n- `.claude/rules/style.md` — Code style for every file\n\nScoped:\n- `.claude/rules/api.md` — API conventions (applies to `src/api/**`)\n\nOn request:\n- `.kiro/steering/release.md`\n"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "target": "claude-code",
+          "ingredient": "rule/style",
+          "sha256": "sha256:c44b56d792481653e14e370193267f47e834f5a2d2bfe828614192f3d4f60578",
+          "text": "# Style\nUse consistent formatting.\n"
+        },
+        {
+          "path": ".claude/skills/deploy/run.sh",
+          "target": "claude-code",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561",
+          "text": "#!/bin/sh\necho deploying\n"
+        },
+        {
+          "path": ".claude/skills/deploy/SKILL.md",
+          "target": "claude-code",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f",
+          "text": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n"
+        },
+        {
+          "path": ".kiro/agents/helper.json",
+          "target": "kiro",
+          "ingredient": "agent/helper",
+          "sha256": "sha256:244fe6f5fedf50985e9b1c2c5a2951f551afe5d3a2bcb421d5f70a7f5abe0696",
+          "text": "{\n  \"name\": \"helper\",\n  \"description\": \"\",\n  \"prompt\": \"Help the user.\\n\\n{{craftar.rules.index}}\",\n  \"tools\": [],\n  \"allowedTools\": [],\n  \"resources\": [\n    \"file://.kiro/steering/**/*.md\"\n  ],\n  \"permissions\": {\n    \"rules\": [\n      {\n        \"capability\": \"fs_read\",\n        \"match\": [\n          \"./**\"\n        ],\n        \"effect\": \"allow\"\n      }\n    ]\n  }\n}\n"
+        },
+        {
+          "path": ".kiro/skills/deploy/run.sh",
+          "target": "kiro",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561",
+          "text": "#!/bin/sh\necho deploying\n"
+        },
+        {
+          "path": ".kiro/skills/deploy/SKILL.md",
+          "target": "kiro",
+          "ingredient": "skill/deploy",
+          "sha256": "sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f",
+          "text": "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deployment.\n"
+        },
+        {
+          "path": ".kiro/steering/api.md",
+          "target": "kiro",
+          "ingredient": "rule/api",
+          "sha256": "sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c",
+          "text": "---\ninclusion: fileMatch\nfileMatchPattern: \"src/api/**\"\n---\n\n<!-- GENERATED from .claude/rules/api.md by craftar -- do not edit. -->\n\n# API\nEvery endpoint is RESTful.\n"
+        },
+        {
+          "path": ".kiro/steering/readme.md",
+          "target": "kiro",
+          "ingredient": "rule/readme",
+          "sha256": "sha256:c17e0b406f38f8cc52a87aedd14f7fe8136fbbc34a9fd5021d60f7af7dca43f3",
+          "text": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/readme.md by craftar -- do not edit. -->\n\n# Rules\n\nAlways on:\n- `.kiro/steering/readme.md` — Index of the rules\n- `.kiro/steering/style.md` — Code style for every file\n\nScoped:\n- `.kiro/steering/api.md` — API conventions (applies to `src/api/**`)\n\nOn request:\n- `.kiro/steering/release.md`\n"
+        },
+        {
+          "path": ".kiro/steering/release.md",
+          "target": "kiro",
+          "ingredient": "rule/release",
+          "sha256": "sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3",
+          "text": "---\ninclusion: manual\n---\n\n<!-- GENERATED from .claude/rules/release.md by craftar -- do not edit. -->\n\n# Release\nTag after review.\n"
+        },
+        {
+          "path": ".kiro/steering/style.md",
+          "target": "kiro",
+          "ingredient": "rule/style",
+          "sha256": "sha256:89166ce1e9e91201be5a37294c63b62264654b908de4fe9517d825a4b3fc0960",
+          "text": "---\ninclusion: always\n---\n\n<!-- GENERATED from .claude/rules/style.md by craftar -- do not edit. -->\n\n# Style\nUse consistent formatting.\n"
+        },
+        {
+          "path": "AGENTS.md",
+          "target": "agents-md",
+          "ingredient": "rule/*",
+          "sha256": "sha256:331ddb4479cafb7c919165cdbe51d209f5f2ead6579a8cca84861b26cb1244c5",
+          "text": "<!-- GENERATED by craftar from the Forge. Edit the rule ingredients, not this file. -->\n\n# AGENTS.md — acme\n\nConventions for coding agents working in this workspace. Sections below are the always-on rules;\nscoped rules are listed at the end with the paths they apply to.\n\n<!-- rule: style -->\n# Style\nUse consistent formatting.\n\n<!-- rule: readme -->\n# Rules\n\nAlways on:\n- `.claude/rules/readme.md` — Index of the rules\n- `.claude/rules/style.md` — Code style for every file\n\nScoped:\n- `.claude/rules/api.md` — API conventions (applies to `src/api/**`)\n\nOn request:\n- `.kiro/steering/release.md`\n\n## Scoped rules\n\n- `.claude/rules/api.md` — applies to `src/api/**`\n"
+        }
+      ],
+      "warnings": [
+        "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper",
+        "agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy",
+        "craftar.rules.index: no description for rule release — listed by name only",
+        "{{craftar.rules.index}} is expanded in rule and steering bodies only — left as written in .claude/agents/helper.md, .kiro/agents/helper.json"
+      ]
+    },
+    "sync": {
+      "code": 0,
+      "stdout": "craftar sync — profile acme · recipes base · targets claude-code, kiro, agents-md\n  wrote 14, removed 0 orphan(s), skipped 0\n  + .claude/agents/helper.md\n  + .claude/rules/api.md\n  + .claude/rules/readme.md\n  + .claude/rules/style.md\n  + .claude/skills/deploy/run.sh\n  + .claude/skills/deploy/SKILL.md\n  + .kiro/agents/helper.json\n  + .kiro/skills/deploy/run.sh\n  + .kiro/skills/deploy/SKILL.md\n  + .kiro/steering/api.md\n  + .kiro/steering/readme.md\n  + .kiro/steering/release.md\n  + .kiro/steering/style.md\n  + AGENTS.md\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\n  warn agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy\n  warn craftar.rules.index: no description for rule release — listed by name only\n  warn {{craftar.rules.index}} is expanded in rule and steering bodies only — left as written in .claude/agents/helper.md, .kiro/agents/helper.json\n",
+      "stderr": ""
+    },
+    "lock": "{\n  \"schema\": 2,\n  \"forge\": {\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"commit\": null\n  },\n  \"profile\": \"acme\",\n  \"recipes\": [\n    \"base\"\n  ],\n  \"targets\": [\n    \"claude-code\",\n    \"kiro\",\n    \"agents-md\"\n  ],\n  \"generatedAt\": \"<timestamp>\",\n  \"files\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"hash\": \"sha256:62a1313b46be16a0e095612070ec87b1ae818c35ea0cb892b7e8e506ce93433c\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\"\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"hash\": \"sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".claude/rules/readme.md\",\n      \"hash\": \"sha256:f2ef2683037e86e4eb5d6ab0c725231b6a859a8f7312f8c2edd22b01e512b2e4\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/readme\"\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"hash\": \"sha256:c44b56d792481653e14e370193267f47e834f5a2d2bfe828614192f3d4f60578\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\"\n    },\n    {\n      \"path\": \".claude/skills/deploy/run.sh\",\n      \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".claude/skills/deploy/SKILL.md\",\n      \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".kiro/agents/helper.json\",\n      \"hash\": \"sha256:244fe6f5fedf50985e9b1c2c5a2951f551afe5d3a2bcb421d5f70a7f5abe0696\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/helper\"\n    },\n    {\n      \"path\": \".kiro/skills/deploy/run.sh\",\n      \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".kiro/skills/deploy/SKILL.md\",\n      \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\"\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"hash\": \"sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\"\n    },\n    {\n      \"path\": \".kiro/steering/readme.md\",\n      \"hash\": \"sha256:c17e0b406f38f8cc52a87aedd14f7fe8136fbbc34a9fd5021d60f7af7dca43f3\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/readme\"\n    },\n    {\n      \"path\": \".kiro/steering/release.md\",\n      \"hash\": \"sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/release\"\n    },\n    {\n      \"path\": \".kiro/steering/style.md\",\n      \"hash\": \"sha256:89166ce1e9e91201be5a37294c63b62264654b908de4fe9517d825a4b3fc0960\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/style\"\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"hash\": \"sha256:331ddb4479cafb7c919165cdbe51d209f5f2ead6579a8cca84861b26cb1244c5\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\"\n    }\n  ]\n}\n",
+    "syncCheck": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base\n  unchanged 14\n  warn agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\n  warn agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy\n  warn craftar.rules.index: no description for rule release — listed by name only\n  warn {{craftar.rules.index}} is expanded in rule and steering bodies only — left as written in .claude/agents/helper.md, .kiro/agents/helper.json\n\nworkspace in sync\n",
+      "stderr": ""
+    },
+    "status": {
+      "code": 0,
+      "stdout": "{\n  \"forge\": {\n    \"kind\": \"path\",\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"defaultBranch\": null,\n    \"commit\": null,\n    \"lockCommit\": null,\n    \"fetched\": false\n  },\n  \"statuses\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\",\n      \"lock\": {\n        \"path\": \".claude/agents/helper.md\",\n        \"hash\": \"sha256:62a1313b46be16a0e095612070ec87b1ae818c35ea0cb892b7e8e506ce93433c\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"agent/helper\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".claude/rules/api.md\",\n        \"hash\": \"sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/readme.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/readme\",\n      \"lock\": {\n        \"path\": \".claude/rules/readme.md\",\n        \"hash\": \"sha256:f2ef2683037e86e4eb5d6ab0c725231b6a859a8f7312f8c2edd22b01e512b2e4\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/readme\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\",\n      \"lock\": {\n        \"path\": \".claude/rules/style.md\",\n        \"hash\": \"sha256:c44b56d792481653e14e370193267f47e834f5a2d2bfe828614192f3d4f60578\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/style\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/deploy/run.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".claude/skills/deploy/run.sh\",\n        \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".claude/skills/deploy/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".claude/skills/deploy/SKILL.md\",\n        \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".kiro/agents/helper.json\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"agent/helper\",\n      \"lock\": {\n        \"path\": \".kiro/agents/helper.json\",\n        \"hash\": \"sha256:244fe6f5fedf50985e9b1c2c5a2951f551afe5d3a2bcb421d5f70a7f5abe0696\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"agent/helper\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/deploy/run.sh\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".kiro/skills/deploy/run.sh\",\n        \"hash\": \"sha256:f06780cea5d2adda12fcadf13003031e1577023d11f2d6c0555862e7aed74561\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".kiro/skills/deploy/SKILL.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"skill/deploy\",\n      \"lock\": {\n        \"path\": \".kiro/skills/deploy/SKILL.md\",\n        \"hash\": \"sha256:e3688cb9dea55a770a2f057ee676ea867d8611c5da56b6e9eda0271235c7d08f\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"skill/deploy\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/api.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/api\",\n      \"lock\": {\n        \"path\": \".kiro/steering/api.md\",\n        \"hash\": \"sha256:bb82b743a75a75246fe08849249bf182f5acd995a2129ac9b9663e012392596c\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/api\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/readme.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/readme\",\n      \"lock\": {\n        \"path\": \".kiro/steering/readme.md\",\n        \"hash\": \"sha256:c17e0b406f38f8cc52a87aedd14f7fe8136fbbc34a9fd5021d60f7af7dca43f3\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/readme\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/release.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/release\",\n      \"lock\": {\n        \"path\": \".kiro/steering/release.md\",\n        \"hash\": \"sha256:ff4c86b9e8569993945248830fb5cd996538f5750c105615edc57032c49496d3\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/release\"\n      }\n    },\n    {\n      \"path\": \".kiro/steering/style.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"kiro\",\n      \"ingredient\": \"rule/style\",\n      \"lock\": {\n        \"path\": \".kiro/steering/style.md\",\n        \"hash\": \"sha256:89166ce1e9e91201be5a37294c63b62264654b908de4fe9517d825a4b3fc0960\",\n        \"target\": \"kiro\",\n        \"ingredient\": \"rule/style\"\n      }\n    },\n    {\n      \"path\": \"AGENTS.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"agents-md\",\n      \"ingredient\": \"rule/*\",\n      \"lock\": {\n        \"path\": \"AGENTS.md\",\n        \"hash\": \"sha256:331ddb4479cafb7c919165cdbe51d209f5f2ead6579a8cca84861b26cb1244c5\",\n        \"target\": \"agents-md\",\n        \"ingredient\": \"rule/*\"\n      }\n    }\n  ],\n  \"warnings\": [\n    \"agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper\",\n    \"agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy\",\n    \"craftar.rules.index: no description for rule release — listed by name only\",\n    \"{{craftar.rules.index}} is expanded in rule and steering bodies only — left as written in .claude/agents/helper.md, .kiro/agents/helper.json\"\n  ],\n  \"unsetParams\": []\n}\n",
+      "stderr": ""
+    },
+    "diff": {
+      "code": 0,
+      "stdout": "no differences\n",
+      "stderr": ""
+    },
+    "targets": {
+      "code": 0,
+      "stdout": "{\n  \"ingredientTypes\": [\n    \"rule\",\n    \"agent\",\n    \"command\",\n    \"skill\",\n    \"mcp\",\n    \"script\",\n    \"steering\",\n    \"hook\",\n    \"service\"\n  ],\n  \"targets\": [\n    {\n      \"name\": \"claude-code\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/rules/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"agent\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/agents/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"command\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/commands/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"skill\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/skills/<name>/<file>\",\n            \".claude/skills/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".mcp.json\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/scripts/<file>\"\n          ],\n          \"note\": null\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/hooks/<file>\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": \"the registration is written to .claude/settings.craftar.example.json, to copy\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"kiro\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": \"inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)\"\n        },\n        \"agent\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/agents/<name>.json\"\n          ],\n          \"note\": \"written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files\"\n        },\n        \"command\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/commands/<name>.md\"\n          ],\n          \"note\": \"written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description\"\n        },\n        \"skill\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/skills/<name>/<file>\"\n          ],\n          \"note\": \"in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md\"\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/settings/mcp.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"agents-md\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \"AGENTS.md\"\n          ],\n          \"note\": \"always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning\"\n        },\n        \"agent\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"command\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"skill\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"mcp\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    }\n  ],\n  \"warnings\": []\n}\n",
+      "stderr": ""
+    },
+    "doctorWorkspace": [
+      {
+        "id": "config",
+        "level": "ok",
+        "message": "craftar.yaml loads (forge ../forge, profile acme)",
+        "fix": null
+      },
+      {
+        "id": "forge",
+        "level": "ok",
+        "message": "../forge @ no git",
+        "fix": null
+      },
+      {
+        "id": "forge-inside",
+        "level": "ok",
+        "message": "outside the Forge",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/helper",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "agents-md: 1 skill ingredient(s) have no AGENTS.md equivalent — skipped: skill/deploy",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "craftar.rules.index: no description for rule release — listed by name only",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "warn",
+        "message": "{{craftar.rules.index}} is expanded in rule and steering bodies only — left as written in .claude/agents/helper.md, .kiro/agents/helper.json",
+        "fix": null
+      },
+      {
+        "id": "params",
+        "level": "ok",
+        "message": "every declared parameter has a value",
+        "fix": null
+      },
+      {
+        "id": "agents-md-size",
+        "level": "ok",
+        "message": "AGENTS.md is 675 bytes, within the budget of 32768",
+        "fix": null
+      },
+      {
+        "id": "mcp-env",
+        "level": "ok",
+        "message": "every variable a written MCP server expects is set",
+        "fix": null
+      },
+      {
+        "id": "skill-trigger",
+        "level": "warn",
+        "message": "skill deploy: its description does not say when to use it, so the agent does not load it by itself",
+        "fix": "add a \"Use when …\" sentence to its SKILL.md description"
+      },
+      {
+        "id": "lock",
+        "level": "ok",
+        "message": "schema 2, generated <timestamp>",
+        "fix": null
+      },
+      {
+        "id": "status",
+        "level": "ok",
+        "message": "up to date",
+        "fix": null
+      },
+      {
+        "id": "registered",
+        "level": "ok",
+        "message": "in the registry",
+        "fix": null
+      }
+    ],
+    "doctorExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/api.md\n  target      claude-code\n  ingredient  rule/api\n  via recipes base\n  profile     acme  (recipes: base)\n  hash        sha256:b1d5e3c07ffc8a790fc95029843072c5aed176b70c9a115e12fdb0b773a53bd9\n",
+      "stderr": ""
+    }
+  },
+  "claude-only": {
+    "plan": {
+      "files": [
+        {
+          "path": ".claude/agents/helper.md",
+          "target": "claude-code",
+          "ingredient": "agent/helper",
+          "sha256": "sha256:4aa5515498ce3ee6a78d1ce5784b5c44c7efcd673035f97ed826daaaec139d1f",
+          "text": "---\nname: helper\ndescription: Helper agent\ntools: \n---\nHelp the user.\n"
+        },
+        {
+          "path": ".claude/rules/style.md",
+          "target": "claude-code",
+          "ingredient": "rule/style",
+          "sha256": "sha256:c44b56d792481653e14e370193267f47e834f5a2d2bfe828614192f3d4f60578",
+          "text": "# Style\nUse consistent formatting.\n"
+        }
+      ],
+      "warnings": []
+    },
+    "sync": {
+      "code": 0,
+      "stdout": "craftar sync — profile acme · recipes base · targets claude-code\n  wrote 2, removed 0 orphan(s), skipped 0\n  + .claude/agents/helper.md\n  + .claude/rules/style.md\n",
+      "stderr": ""
+    },
+    "lock": "{\n  \"schema\": 2,\n  \"forge\": {\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"commit\": null\n  },\n  \"profile\": \"acme\",\n  \"recipes\": [\n    \"base\"\n  ],\n  \"targets\": [\n    \"claude-code\"\n  ],\n  \"generatedAt\": \"<timestamp>\",\n  \"files\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"hash\": \"sha256:4aa5515498ce3ee6a78d1ce5784b5c44c7efcd673035f97ed826daaaec139d1f\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\"\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"hash\": \"sha256:c44b56d792481653e14e370193267f47e834f5a2d2bfe828614192f3d4f60578\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\"\n    }\n  ]\n}\n",
+    "syncCheck": {
+      "code": 0,
+      "stdout": "craftar status — profile acme · recipes base\n  unchanged 2\n\nworkspace in sync\n",
+      "stderr": ""
+    },
+    "status": {
+      "code": 0,
+      "stdout": "{\n  \"forge\": {\n    \"kind\": \"path\",\n    \"source\": \"../forge\",\n    \"ref\": null,\n    \"defaultBranch\": null,\n    \"commit\": null,\n    \"lockCommit\": null,\n    \"fetched\": false\n  },\n  \"statuses\": [\n    {\n      \"path\": \".claude/agents/helper.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"agent/helper\",\n      \"lock\": {\n        \"path\": \".claude/agents/helper.md\",\n        \"hash\": \"sha256:4aa5515498ce3ee6a78d1ce5784b5c44c7efcd673035f97ed826daaaec139d1f\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"agent/helper\"\n      }\n    },\n    {\n      \"path\": \".claude/rules/style.md\",\n      \"state\": \"unchanged\",\n      \"target\": \"claude-code\",\n      \"ingredient\": \"rule/style\",\n      \"lock\": {\n        \"path\": \".claude/rules/style.md\",\n        \"hash\": \"sha256:c44b56d792481653e14e370193267f47e834f5a2d2bfe828614192f3d4f60578\",\n        \"target\": \"claude-code\",\n        \"ingredient\": \"rule/style\"\n      }\n    }\n  ],\n  \"warnings\": [],\n  \"unsetParams\": []\n}\n",
+      "stderr": ""
+    },
+    "diff": {
+      "code": 0,
+      "stdout": "no differences\n",
+      "stderr": ""
+    },
+    "targets": {
+      "code": 0,
+      "stdout": "{\n  \"ingredientTypes\": [\n    \"rule\",\n    \"agent\",\n    \"command\",\n    \"skill\",\n    \"mcp\",\n    \"script\",\n    \"steering\",\n    \"hook\",\n    \"service\"\n  ],\n  \"targets\": [\n    {\n      \"name\": \"claude-code\",\n      \"inUse\": true,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/rules/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"agent\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/agents/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"command\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/commands/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"skill\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/skills/<name>/<file>\",\n            \".claude/skills/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".mcp.json\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/scripts/<file>\"\n          ],\n          \"note\": null\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".claude/hooks/<file>\",\n            \".claude/settings.craftar.example.json\"\n          ],\n          \"note\": \"the registration is written to .claude/settings.craftar.example.json, to copy\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"kiro\",\n      \"inUse\": false,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": \"inclusion frontmatter and a banner are added; a .claude/rules/ reference becomes .kiro/steering/ when kiro writes that file, and otherwise follows the rule it names (kept for claude-code, AGENTS.md (rule: <x>), or <x> (rule not in this workspace) with a warning)\"\n        },\n        \"agent\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/agents/<name>.json\"\n          ],\n          \"note\": \"written as JSON; tools mapped to Kiro names, one with no equivalent dropped with a warning; permissions.rules derived from the mapped tools; .claude/rules/ references resolved as for a rule; resources taken from the ingredient, else derived from the steering files\"\n        },\n        \"command\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/steering/commands/<name>.md\"\n          ],\n          \"note\": \"written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description\"\n        },\n        \"skill\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \".kiro/skills/<name>/<file>\"\n          ],\n          \"note\": \"in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md\"\n        },\n        \"mcp\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/settings/mcp.json\"\n          ],\n          \"note\": null\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"native\",\n          \"output\": [\n            \".kiro/steering/<name>.md\"\n          ],\n          \"note\": null\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    },\n    {\n      \"name\": \"agents-md\",\n      \"inUse\": false,\n      \"capabilities\": {\n        \"rule\": {\n          \"state\": \"converted\",\n          \"output\": [\n            \"AGENTS.md\"\n          ],\n          \"note\": \"always-on rules are embedded in AGENTS.md; a scoped rule is listed at the file another target writes, or embedded when none does; .claude/rules/ references in the bodies, link text included, point at the file a target writes or the rule's place in AGENTS.md, or read <x> (rule not in this workspace) with a warning\"\n        },\n        \"agent\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"command\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"skill\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"mcp\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"script\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"steering\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"hook\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        },\n        \"service\": {\n          \"state\": \"unsupported\",\n          \"output\": [],\n          \"note\": \"skipped with a warning when aimed at this target\"\n        }\n      }\n    }\n  ],\n  \"warnings\": []\n}\n",
+      "stderr": ""
+    },
+    "doctorWorkspace": [
+      {
+        "id": "config",
+        "level": "ok",
+        "message": "craftar.yaml loads (forge ../forge, profile acme)",
+        "fix": null
+      },
+      {
+        "id": "forge",
+        "level": "ok",
+        "message": "../forge @ no git",
+        "fix": null
+      },
+      {
+        "id": "forge-inside",
+        "level": "ok",
+        "message": "outside the Forge",
+        "fix": null
+      },
+      {
+        "id": "plan",
+        "level": "ok",
+        "message": "2 files",
+        "fix": null
+      },
+      {
+        "id": "params",
+        "level": "ok",
+        "message": "every declared parameter has a value",
+        "fix": null
+      },
+      {
+        "id": "mcp-env",
+        "level": "ok",
+        "message": "every variable a written MCP server expects is set",
+        "fix": null
+      },
+      {
+        "id": "lock",
+        "level": "ok",
+        "message": "schema 2, generated <timestamp>",
+        "fix": null
+      },
+      {
+        "id": "status",
+        "level": "ok",
+        "message": "up to date",
+        "fix": null
+      },
+      {
+        "id": "registered",
+        "level": "ok",
+        "message": "in the registry",
+        "fix": null
+      }
+    ],
+    "doctorExit": 0,
+    "explain": {
+      "code": 0,
+      "stdout": ".claude/rules/style.md\n  target      claude-code\n  ingredient  rule/style\n  via recipes base\n  profile     acme  (recipes: base)\n  hash        sha256:c44b56d792481653e14e370193267f47e834f5a2d2bfe828614192f3d4f60578\n",
+      "stderr": ""
+    }
+  }
+}
