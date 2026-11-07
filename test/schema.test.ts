@@ -6,7 +6,8 @@ import { ForgeManifestSchema, FORGE_SCHEMA_AGENTS_MD_PRIMARY, FORGE_SCHEMA_INTEG
   FORGE_SCHEMA_PROFILE_LOCAL, FORGE_SCHEMA_METADATA_PARAMS,
   FORGE_SCHEMA_RECIPE_SECTIONS, FORGE_SCHEMA_SECTION_FILES, FORGE_SCHEMA_LOCAL_OVERRIDE, FORGE_SCHEMA_PROFILE_EXTENDS, FORGE_SCHEMA_LIST_PARAMS, FORGE_SCHEMA_SECTIONS, FORGE_SCHEMA_SERVER_PARAMS, FORGE_SCHEMA_TARGET_SECTIONS, FORGE_SCHEMA_NATIVE_TARGETS,
   FORGE_SCHEMA_SLICE_2_TARGETS,
-  FORGE_SCHEMA_GEMINI, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
+  FORGE_SCHEMA_GEMINI,
+  FORGE_SCHEMA_OPENCODE, IngredientSchema, INGREDIENT_TYPES, ProfileSchema, RecipeSchema, RegistrySchema, UnifyPlanSchema, WorkspaceConfigSchema } from "../src/schema/index.js";
 import { makeForge, tmpDir, writeFiles } from "./helpers/forge.js";
 
 /** A minimal valid ingredient of each type. */
@@ -148,7 +149,7 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     while (cleanups.length) await fs.rm(cleanups.pop()!, { recursive: true, force: true });
   });
 
-  it("loads a manifest at schema 1 to 17, and with no schema (read as 1); refuses schema 18", () => {
+  it("loads a manifest at schema 1 to 18, and with no schema (read as 1); refuses schema 19", () => {
     expect(FORGE_SCHEMA_SECTIONS).toBe(2);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 1 }).schema).toBe(1);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 2 }).schema).toBe(2);
@@ -183,13 +184,15 @@ describe("sections and the manifest schema (spec 11 §5.2)", () => {
     expect(ForgeManifestSchema.parse({ name: "f", schema: 16 }).schema).toBe(16);
     expect(FORGE_SCHEMA_GEMINI).toBe(17);
     expect(ForgeManifestSchema.parse({ name: "f", schema: 17 }).schema).toBe(17);
-    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 18 }).success).toBe(false);
+    expect(FORGE_SCHEMA_OPENCODE).toBe(18);
+    expect(ForgeManifestSchema.parse({ name: "f", schema: 18 }).schema).toBe(18);
+    expect(ForgeManifestSchema.safeParse({ name: "f", schema: 19 }).success).toBe(false);
   });
 
-  it("a Forge whose manifest says schema: 18 fails the load, naming the file", async () => {
+  it("a Forge whose manifest says schema: 19 fails the load, naming the file", async () => {
     const root = await tmpDir();
     cleanups.push(root);
-    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 18\n" });
+    await writeFiles(root, { "craftar.forge.yaml": "name: f\nschema: 19\n" });
     await expect(loadForge(root)).rejects.toThrow(/craftar\.forge\.yaml/);
   });
 

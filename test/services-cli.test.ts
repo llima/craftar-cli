@@ -165,9 +165,9 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     expect([b.code, b.stderr]).toEqual([1, `error: ${NOT_FOUND}\n`]);
   });
 
-  it("C3: down with a lock holding schema: 7 → exit 1 with docker not found AFTER a warn line naming schema 7, never 'error: craftar.lock declares...'", async () => {
+  it("C3: down with a lock holding schema: 8 → exit 1 with docker not found AFTER a warn line naming schema 8, never 'error: craftar.lock declares...'", async () => {
     const s = await synced();
-    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), '{"schema": 7}');
+    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), '{"schema": 8}');
     const r = runCli(["services", "down", "--workspace", s.wsRoot], { env: NO_DOCKER });
     expect(r.code).toBe(1);
     // Verify ORDER: warn comes before error
@@ -175,8 +175,8 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     const errorIdx = r.stderr.indexOf(`error: ${NOT_FOUND}`);
     expect(warnIdx).toBeGreaterThanOrEqual(0);
     expect(errorIdx).toBeGreaterThan(warnIdx);
-    expect(r.stderr).toContain("schema 7");
-    expect(r.stderr).not.toContain("error: craftar.lock declares schema 7");
+    expect(r.stderr).toContain("schema 8");
+    expect(r.stderr).not.toContain("error: craftar.lock declares schema 8");
   });
 
   it("C3: down with craftar.lock = '<<<<<<< HEAD' → same shape: warn then docker not found", async () => {
@@ -192,13 +192,13 @@ describe("craftar services — without Docker (spec 31 §4.2–§4.4)", () => {
     expect(r.stderr).not.toContain("error: craftar.lock");
   });
 
-  it("C3: up and status --json with a schema 7 lock → exit 1 with 'error: craftar.lock declares schema 7...'", async () => {
+  it("C3: up and status --json with a schema 8 lock → exit 1 with 'error: craftar.lock declares schema 8...'", async () => {
     const s = await synced();
-    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), '{"schema": 7}');
+    await fs.writeFile(path.join(s.wsRoot, "craftar.lock"), '{"schema": 8}');
     const u = runCli(["services", "up", "--workspace", s.wsRoot], { env: NO_DOCKER });
-    expect([u.code, u.stderr]).toEqual([1, "error: craftar.lock declares schema 7, which this craftar does not read — upgrade craftar\n"]);
+    expect([u.code, u.stderr]).toEqual([1, "error: craftar.lock declares schema 8, which this craftar does not read — upgrade craftar\n"]);
     const st = runCli(["services", "status", "--json", "--workspace", s.wsRoot], { env: NO_DOCKER });
-    expect([st.code, st.stderr]).toEqual([1, "error: craftar.lock declares schema 7, which this craftar does not read — upgrade craftar\n"]);
+    expect([st.code, st.stderr]).toEqual([1, "error: craftar.lock declares schema 8, which this craftar does not read — upgrade craftar\n"]);
   });
 
   it("status --json: the contract's keys in order, every value, exit 1 with Docker absent", async () => {

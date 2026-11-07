@@ -19,7 +19,7 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
  * agents-md, agent-skills and codex write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` is shared, D5),
  * so they have no entries.
  */
-export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex" | "opencode">, string>;
 
 /** The copilot target's second MCP file, for the Copilot CLI, which reads `.github/mcp.json` (or `.mcp.json`) and never `.vscode/mcp.json`. */
 export const COPILOT_CLI_MCP_FILE = ".github/mcp.json";

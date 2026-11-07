@@ -290,6 +290,17 @@ export const CAPABILITIES = {
     },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
+  opencode: {
+    rule: { state: "unsupported", output: [], note: "through agents-md: OpenCode reads AGENTS.md, written by the agents-md target" },
+    agent: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    command: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    skill: { state: "unsupported", output: [], note: "through agent-skills: OpenCode reads .agents/skills/, written by the agent-skills target" },
+    mcp: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -345,7 +356,8 @@ const writtenIs: [
   Equal<Written<"agent-skills">, "command" | "skill">,
   Equal<Written<"codex">, "agent" | "hook">,
   Equal<Written<"antigravity">, "rule" | "agent" | "mcp" | "hook">,
-] = [true, true, true, true, true, true, true, true];
+  Equal<Written<"opencode">, never>,
+] = [true, true, true, true, true, true, true, true, true];
 void writtenIs;
 
 /**
@@ -362,6 +374,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; 
   "agent-skills": { label: "Agent Skills", per: "type" },
   codex: { label: "Codex", per: "type", carriers: { rule: "agents-md", command: "agent-skills", skill: "agent-skills" } },
   antigravity: { label: "Antigravity", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
+  opencode: { label: "OpenCode", per: "type", carriers: { rule: "agents-md", skill: "agent-skills" } },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {
