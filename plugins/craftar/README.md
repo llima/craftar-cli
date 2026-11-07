@@ -52,7 +52,9 @@ Measured on 2026-11-05 on Linux, with Claude Code 2.1.318, `craftar` 0.64.0 and 
 - **After.** Once you trust a project, the `env` block of its `.claude/settings.json` reaches the server: a `NODE_OPTIONS` there made the server's `node` load the project's code, and a `PATH` there made Claude Code start the project's own `craftar` in place of yours. A trusted project's hooks can run its code too, so trust a project only when you trust its files.
 - **`claude mcp list`**, typed in a folder you never trusted, started the server, without the project's `env`.
 
-Not measured: whether Claude Code asks before the first tool call in its default permission mode (the session measured ran in auto mode), a plugin installed from the marketplace, macOS and native Windows.
+On native Windows, on 2026-11-07, with Claude Code 2.1.302, `craftar` 1.2.0 and this plugin at 0.1.2: in a project Claude Code held as trusted, a `PATH` in its `.claude/settings.json` made Claude Code start the project's own `craftar` in place of yours, as on Linux. A `NODE_OPTIONS` there was not tried.
+
+Not measured: whether Claude Code asks before the first tool call in its default permission mode (the session measured ran in auto mode), a plugin installed from the marketplace, macOS, and, on native Windows, whether the server waits for the trust dialog.
 
 ## What to know before enabling it everywhere
 
