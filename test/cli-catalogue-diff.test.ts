@@ -412,7 +412,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "kiro · steering .kiro/steering/<name>.md",
       "claude-code · hook .claude/hooks/<file>, .claude/settings.craftar.example.json — the registration is written to .claude/settings.craftar.example.json, to copy",
       "codex · hook .codex/hooks.json — the registration in Claude Code's shape, events and matchers kept (Codex uses Claude Code's names); an event Codex lacks, or an entry with args, skipped with a warning; shell dropped with a warning; the hook's files stay claude-code's, and Codex reviews each hook in /hooks before it runs",
-      "antigravity · hook .agents/hooks.json — one named hook per ingredient; PreToolUse, PostToolUse, SessionStart and Stop kept, any other event skipped with a warning; a matcher translated to Antigravity's tool names when it is a list of Claude Code tool names, else skipped with a warning; an entry with args skipped and shell dropped, each with a warning; the hook's files stay claude-code's",
+      "antigravity · hook .agents/hooks.json — one named hook per ingredient; PreToolUse, PostToolUse, SessionStart and Stop kept, any other event skipped with a warning; a matcher translated to Antigravity's tool names (the pairing inferred from its tools' descriptions) when it is a list of Claude Code tool names, else skipped with a warning; an entry with args skipped and shell dropped, each with a warning; the hook's files stay claude-code's; Antigravity's trust of a workspace hook is not documented",
     ]);
     // Services are not a target; they get their own line after the paths block (spec 31 §4.7)
     expect(norm[norm.length - 1]).toBe("service: written by sync under .craftar/ for no target; see craftar services");

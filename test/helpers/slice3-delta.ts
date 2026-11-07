@@ -2,11 +2,12 @@
  * Spec 61 slice 3's deliberate delta (H1, ruled 2026-11-07), filtered by name out of the slice-1 and slice-2 off pins so they keep
  * proving that nothing else moved: the hook skip warnings of cursor, copilot, codex and antigravity (cursor and copilot become
  * "through claude-code", codex and antigravity write hooks); the new `codex: hook …` / `antigravity: hook …` warnings; the files
- * `.codex/hooks.json` and `.agents/hooks.json` and their lock entries; and the hook cell of every native target in `targets --json`.
+ * `.codex/hooks.json` and `.agents/hooks.json` and their lock entries; and the hook cell of cursor, copilot, codex and antigravity in
+ * `targets --json` (agent-skills' hook cell did not move, so it is compared).
  */
 const LINE = /(cursor|copilot|codex|antigravity): 1 hook ingredient\(s\) have no (Cursor|Copilot|Codex|Antigravity) equivalent|(^|\s|")(codex|antigravity): hook /;
 const HOOK_FILES = new Set([".codex/hooks.json", ".agents/hooks.json"]);
-const NATIVE = new Set(["cursor", "copilot", "agent-skills", "codex", "antigravity", "gemini"]);
+const NATIVE = new Set(["cursor", "copilot", "codex", "antigravity"]);
 
 function stripText(s: string): string {
   // A JSON document printed on stdout (status --json, targets --json): filter its arrays, not its lines

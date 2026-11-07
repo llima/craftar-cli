@@ -472,7 +472,7 @@
           "output": [
             ".agents/hooks.json"
           ],
-          "note": "one named hook per ingredient; PreToolUse, PostToolUse, SessionStart and Stop kept, any other event skipped with a warning; a matcher translated to Antigravity's tool names when it is a list of Claude Code tool names, else skipped with a warning; an entry with args skipped and shell dropped, each with a warning; the hook's files stay claude-code's"
+          "note": "one named hook per ingredient; PreToolUse, PostToolUse, SessionStart and Stop kept, any other event skipped with a warning; a matcher translated to Antigravity's tool names (the pairing inferred from its tools' descriptions) when it is a list of Claude Code tool names, else skipped with a warning; an entry with args skipped and shell dropped, each with a warning; the hook's files stay claude-code's; Antigravity's trust of a workspace hook is not documented"
         },
         "service": {
           "state": "unsupported",

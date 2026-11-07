@@ -147,6 +147,8 @@ export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[]
     }
     // Only where a hand has touched the file: in `update` and `orphan` the disk side is what craftar wrote.
     if (s.state === "drift" || s.state === "collision") {
+      // The new targets' hooks files (hook/*) are not withheld: no `env` value reaches them, and a substituted credential fails the
+      // plan before they are written (hookRegistrations runs credentialIn).
       if (opts.withholdMcp && mcpTagged(s)) {
         out.push(noted(MCP_CONTENT_HIDDEN));
         continue;
@@ -222,7 +224,8 @@ export function carriedFile(p: Plan, file: string): CarriedFile | null {
 export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile | null {
   const f = p.files.find((x) => x.path === file);
   if (!f) return null;
-  // AGENTS.md and Copilot's .github/copilot-instructions.md (rule/*) and the MCP files (mcp/*) are not one ingredient: nothing resolved has their ref.
+  // AGENTS.md and Copilot's .github/copilot-instructions.md (rule/*), the MCP files (mcp/*) and the hooks files of codex and
+  // antigravity (hook/*) are not one ingredient: nothing resolved has their ref.
   const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
   return {
     path: f.path,

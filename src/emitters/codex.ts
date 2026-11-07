@@ -2,6 +2,9 @@ import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { tomlDocument } from "../core/toml.js";
 import { codexHooks } from "./hooks.js";
+
+/** Codex's project hooks file (spec 61 slice 3, H1): dedicated to hooks, Claude Code's shape. */
+export const CODEX_HOOKS = ".codex/hooks.json";
 import { outName, ownRuleRefs, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
 
@@ -12,9 +15,6 @@ import type { Emitter, PlannedFile } from "./types.js";
  * `.codex/config.toml` (D5) — the matrix warns for each here. Since slice 3 (H1) a hook's registration is written to
  * `.codex/hooks.json` (`codexHooks`). Text keeps the line endings of the file it replaces (LF when new), no BOM.
  */
-/** Codex's project hooks file (spec 61 slice 3, H1): dedicated to hooks, Claude Code's shape. */
-export const CODEX_HOOKS = ".codex/hooks.json";
-
 export const codex: Emitter<"codex"> = {
   target: "codex",
   async emit(ctx) {

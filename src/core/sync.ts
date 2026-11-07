@@ -1037,7 +1037,9 @@ export async function plan(ws: Workspace): Promise<Plan> {
     // reaches (open, spec 43 §8). Binary content is not scanned. A CRLF line needs no fold: `$` under `m` matches before `\r`.
     const leftPaths: string[] = [];
     for (const f of planned) {
-      if (f.ingredient === "mcp/*") continue;
+      // The MCP files and the example settings (mcp/*) and the new targets' hooks files (hook/*, the same registration text) are
+      // rendered as data, never as a body: a placeholder there is the server's or the registration's to say.
+      if (f.ingredient === "mcp/*" || f.ingredient === "hook/*") continue;
       const text = decodeForScan(f.content);
       if (text === null || !RULES_INDEX_TOKEN.test(text)) continue;
       if (isRuleOrSteeringOrAgentsMd(f.path) && !RULES_INDEX_LINE.test(text)) continue;

@@ -1,5 +1,5 @@
 import type { ResolvedIngredient } from "../core/resolve.js";
-import { hookRegistrations, outName, type HooksObject } from "./shared.js";
+import { appliesTo, effectiveTargets, hookRegistrations, outName, type HooksObject } from "./shared.js";
 import type { EmitBase } from "./types.js";
 
 /**
@@ -31,20 +31,22 @@ function rendered(ctx: EmitBase, ing: ResolvedIngredient): HooksObject | null {
 }
 
 /**
- * The notes every new target that writes hooks shares (spec 61 slice 3): a hook with no registration writes nothing for it; a
- * registration naming `.claude/hooks/<x>` needs `claude-code` among the targets, which writes that file; `${CLAUDE_PROJECT_DIR}` is
- * set by Claude Code (and Cursor, Gemini), not documented for Codex or Antigravity.
+ * The notes every new target that writes hooks shares (spec 61 slice 3): a hook with no registration writes nothing for it; a hook's
+ * files are written by the `claude-code` target only, so when `claude-code` will not write them — not among the workspace's targets,
+ * or the hook not aimed at it (`effectiveTargets`, the carrier test) — the files reach nothing and that is said; and
+ * `${CLAUDE_PROJECT_DIR}` is set by Claude Code (and Cursor, Gemini), not documented for Codex or Antigravity.
  */
-function sharedNotes(ctx: EmitBase, target: string, ing: ResolvedIngredient, obj: HooksObject | null): void {
+function sharedNotes(ctx: EmitBase, target: string, label: string, ing: ResolvedIngredient, obj: HooksObject | null): void {
+  const claudeWrites = ctx.resolution.targets.includes("claude-code") && appliesTo(effectiveTargets(ing.meta, ctx.resolution), "claude-code");
+  if (!claudeWrites)
+    ctx.warn(`${target}: hook ${ing.ref}: its files are written by the claude-code target only, which does not write them here (not among the targets, or the hook is not aimed at it)`);
   if (obj === null) {
     ctx.warn(`${target}: hook ${ing.ref} has no registration, so nothing is written for it`);
     return;
   }
   const texts = Object.values(obj).flatMap((groups) => groups.flatMap((g) => g.hooks.flatMap((h) => [h.command, ...(h.args ?? [])])));
-  if (!ctx.resolution.targets.includes("claude-code") && texts.some((x) => x.includes(".claude/hooks/")))
-    ctx.warn(`${target}: hook ${ing.ref}: its registration runs a file under .claude/hooks/, which only the claude-code target writes, and claude-code is not among the targets`);
   if (texts.some((x) => x.includes("CLAUDE_PROJECT_DIR")))
-    ctx.warn(`${target}: hook ${ing.ref}: its registration names CLAUDE_PROJECT_DIR, which ${target === "codex" ? "Codex" : "Antigravity"} is not documented to set`);
+    ctx.warn(`${target}: hook ${ing.ref}: its registration names CLAUDE_PROJECT_DIR, which ${label} is not documented to set`);
 }
 
 /**
@@ -57,7 +59,7 @@ export function codexHooks(ctx: EmitBase, hooks: readonly ResolvedIngredient[]):
   const out: HooksObject = Object.create(null);
   for (const ing of hooks) {
     const obj = rendered(ctx, ing);
-    sharedNotes(ctx, "codex", ing, obj);
+    sharedNotes(ctx, "codex", "Codex", ing, obj);
     if (obj === null) continue;
     for (const [event, groups] of Object.entries(obj)) {
       if (!CODEX_EVENTS.has(event)) {
@@ -80,6 +82,8 @@ export function codexHooks(ctx: EmitBase, hooks: readonly ResolvedIngredient[]):
         const group: Record<string, unknown> = {};
         if (g.matcher !== undefined) group.matcher = g.matcher;
         group.hooks = handlers;
+        // `group` is Codex's group shape ({ matcher?, hooks: [{ type, command, timeout? }] }), narrower than HookGroup's handler (no
+        // args / shell): the cast only lets it sit in the same per-event map that is serialized as JSON.
         (out[event] ??= []).push(group as never);
       }
     }
@@ -92,9 +96,10 @@ const ANTIGRAVITY_TOOL_EVENTS = new Set(["PreToolUse", "PostToolUse"]);
 const ANTIGRAVITY_OTHER_EVENTS = new Set(["SessionStart", "Stop"]);
 
 /**
- * Claude Code's tool names → Antigravity's (its tool reference, measured 2026-11-07; the pairing is read from each tool's description,
- * not published by Google). A matcher that is not a plain list of these names — a regex, an MCP tool, an unknown name — has no
- * translation, and its entry is skipped with a warning.
+ * Claude Code's tool names → Antigravity's (its tool reference, measured 2026-11-07; the pairing is INFERRED from each tool's
+ * description, not published by Google — said in the cell note). A matcher that is not a plain list of these names — a regex, an MCP
+ * tool, an unknown name, a name with spaces around it — has no translation, and its entry is skipped with a warning. Antigravity's
+ * matcher is a regex (measured), so the translated names are joined with `|`; it sits on a group wrapping `hooks` (measured verbatim).
  */
 export const ANTIGRAVITY_TOOLS: Readonly<Record<string, readonly string[]>> = {
   Bash: ["run_command"],
@@ -113,7 +118,8 @@ export const ANTIGRAVITY_TOOLS: Readonly<Record<string, readonly string[]>> = {
 /** A Claude Code matcher in Antigravity's names, `*` for none or a match-all, or null when it cannot be translated. */
 export function antigravityMatcher(matcher: string | undefined): string | null {
   if (matcher === undefined || matcher === "" || matcher === "*") return "*";
-  const names = matcher.split(/[|,]/).map((n) => n.trim());
+  // Claude Code reads an exact name or a list of names separated by `|` or `,` (measured); anything else, spaces included, is a regex.
+  const names = matcher.split(/[|,]/);
   if (names.some((n) => !Object.hasOwn(ANTIGRAVITY_TOOLS, n))) return null;
   return [...new Set(names.flatMap((n) => ANTIGRAVITY_TOOLS[n]))].join("|");
 }
@@ -129,7 +135,7 @@ export function antigravityHooks(ctx: EmitBase, hooks: readonly ResolvedIngredie
   const out: Record<string, Record<string, unknown[]>> = Object.create(null);
   for (const ing of hooks) {
     const obj = rendered(ctx, ing);
-    sharedNotes(ctx, "antigravity", ing, obj);
+    sharedNotes(ctx, "antigravity", "Antigravity", ing, obj);
     if (obj === null) continue;
     const named: Record<string, unknown[]> = Object.create(null);
     for (const [event, groups] of Object.entries(obj)) {

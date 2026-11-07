@@ -68,10 +68,10 @@ describe("codex: .codex/hooks.json in Claude Code's shape", () => {
     expect(p.warnings).toContain("codex: hook hook/bare has no registration, so nothing is written for it");
   });
 
-  it("a registration running .claude/hooks/ without claude-code among the targets, or naming CLAUDE_PROJECT_DIR, is warned", async () => {
+  it("without claude-code among the targets the hook's files reach nothing, and a registration naming CLAUDE_PROJECT_DIR is warned", async () => {
     const env = hook("env", [{ event: "Stop", command: "${CLAUDE_PROJECT_DIR}/.claude/hooks/env.sh" }]);
     const { p } = await planned(["codex"], [env]);
-    expect(p.warnings).toContain("codex: hook hook/env: its registration runs a file under .claude/hooks/, which only the claude-code target writes, and claude-code is not among the targets");
+    expect(p.warnings).toContain("codex: hook hook/env: its files are written by the claude-code target only, which does not write them here (not among the targets, or the hook is not aimed at it)");
     expect(p.warnings).toContain("codex: hook hook/env: its registration names CLAUDE_PROJECT_DIR, which Codex is not documented to set");
   });
 
@@ -133,5 +133,20 @@ describe("cursor and copilot: through claude-code", () => {
     const without = await planned(["cursor", "copilot"], [guard]);
     expect(without.p.warnings).toContain("cursor: 1 hook ingredient(s) have no Cursor equivalent — skipped: hook/guard");
     expect(without.p.warnings).toContain("copilot: 1 hook ingredient(s) have no Copilot equivalent — skipped: hook/guard");
+  });
+});
+
+describe("review round: files nobody writes, and the hooks files on drift", () => {
+  it("a hook not aimed at claude-code (or with no claude-code target) writes its registration but says its files reach nothing", async () => {
+    const onlyCodex = hook("only", [{ event: "Stop", command: "bash scripts/only.sh" }], { targets: ["codex"] });
+    const { p } = await planned(["claude-code", "codex"], [onlyCodex]);
+    expect(p.warnings).toContain("codex: hook hook/only: its files are written by the claude-code target only, which does not write them here (not among the targets, or the hook is not aimed at it)");
+    const none = await planned(["antigravity"], [hook("x", [{ event: "Stop", command: "./run.sh" }])]);
+    expect(none.p.warnings).toContain("antigravity: hook hook/x: its files are written by the claude-code target only, which does not write them here (not among the targets, or the hook is not aimed at it)");
+    expect(none.json(".agents/hooks.json")).toEqual({ x: { Stop: [{ type: "command", command: "./run.sh" }] } });
+  });
+
+  it("a matcher with spaces around a name is a regex for Claude Code, so it has no translation", () => {
+    expect(antigravityMatcher("Bash | Edit")).toBeNull();
   });
 });
