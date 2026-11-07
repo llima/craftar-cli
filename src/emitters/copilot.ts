@@ -1,11 +1,11 @@
-import { envReferences, mcpServers, MCP_FILE, outName, ownRuleRefs, textFile } from "./shared.js";
+import { COPILOT_CLI_MCP_FILE, envReferences, mcpServers, MCP_FILE, outName, ownRuleRefs, textFile } from "./shared.js";
 import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import type { Emitter, PlannedFile } from "./types.js";
 
 /**
  * GitHub Copilot target (spec 61 §3.4, §5.2): `.github/instructions/<name>.instructions.md`, `.github/copilot-instructions.md`,
- * `.github/agents/<name>.agent.md`, `.github/prompts/<name>.prompt.md`, `.vscode/mcp.json`.
+ * `.github/agents/<name>.agent.md`, `.github/prompts/<name>.prompt.md`, `.vscode/mcp.json` and `.github/mcp.json`.
  * Skills reach Copilot through the agent-skills target; the matrix warns for them here.
  */
 export const copilot: Emitter<"copilot"> = {
@@ -70,9 +70,13 @@ export const copilot: Emitter<"copilot"> = {
       out.push(await textFile(ctx, ".github/copilot-instructions.md", text, t, "rule/*", { keepBom: false }));
     }
     if (mcp.length) {
-      // mcpServers renders and runs credentialIn first; each server is kept whole, only `${NAME}` becomes `${env:NAME}`.
-      const servers = envReferences(mcpServers(ctx, t, MCP_FILE.copilot, mcp));
-      out.push(await textFile(ctx, MCP_FILE.copilot, JSON.stringify({ servers }, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
+      // mcpServers renders and runs credentialIn first; each server is kept whole.
+      const rendered = mcpServers(ctx, t, MCP_FILE.copilot, mcp);
+      // VS Code's file: `servers`, with `${NAME}` written `${env:NAME}`.
+      out.push(await textFile(ctx, MCP_FILE.copilot, JSON.stringify({ servers: envReferences(rendered) }, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
+      // The Copilot CLI's file: it never reads .vscode/mcp.json, reads `mcpServers` and expands `${NAME}`, not `${env:NAME}`
+      // (measured with Copilot CLI 1.0.105), so the servers go there as rendered.
+      out.push(await textFile(ctx, COPILOT_CLI_MCP_FILE, JSON.stringify({ mcpServers: rendered }, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
     }
     return out;
   },
