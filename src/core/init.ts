@@ -102,7 +102,7 @@ export function checkInitFlags(given: {
 
   // N7: unknown target
   for (const t of given.targets ?? []) {
-    if (t === REMOVED_TARGET) throw new Error(`--targets: ${GEMINI_REMOVED}`);
+    if (t === REMOVED_TARGET) throw new Error(GEMINI_REMOVED);
     if (!(TARGETS as readonly string[]).includes(t)) throw new Error(`unknown target "${t}" (${TARGETS.join(", ")})`);
   }
 

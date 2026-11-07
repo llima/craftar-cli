@@ -326,7 +326,7 @@ function withoutTimestamps(record: ScenarioRecord): ScenarioRecord {
   return { ...record, doctorWorkspace };
 }
 
-/** Keep only the slice-2 target rows of `targets --json`: the gemini row is a deliberate delta. */
+/** Keep only the slice-2 target rows of `targets --json` (1.3.0 added a gemini row as a deliberate delta; 1.4.0 removed it). */
 function filterTargetsOutput(output: string): string {
   try {
     const parsed = JSON.parse(output);

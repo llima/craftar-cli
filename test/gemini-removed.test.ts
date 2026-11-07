@@ -70,6 +70,24 @@ describe("the name gemini is refused in every input, with the same words", () =>
     await expect(load(s).then(plan)).rejects.toThrow(REMOVED);
   });
 
+  it("a craftar.local.yaml targets: [gemini] → the load refuses, naming the removal", async () => {
+    const s = await ws(17, ["claude-code"], [rule("style")]);
+    await fs.writeFile(path.join(s.wsRoot, "craftar.local.yaml"), "targets: [gemini]\n");
+    await expect(load(s)).rejects.toThrow(REMOVED);
+  });
+
+  it("a Forge below schema 17 naming gemini → the removal's words, not the schema near miss", async () => {
+    const s = await ws(16, ["claude-code"], [rule("style", { targets: ["gemini"] })]);
+    const e = await loadForge(s.forgeRoot).then(() => null, (x: Error) => x);
+    expect(e?.message).toContain(REMOVED);
+    expect(e?.message).not.toContain("needs schema");
+    const marked: IngredientSpec = { meta: { type: "rule", name: "tone" }, files: { "rule.md": "<!-- craftar:section intro targets=gemini -->\nHi.\n<!-- /craftar:section -->\n" } };
+    const t = await ws(16, ["claude-code"], [marked]);
+    const pe = await load(t).then(plan).then(() => null, (x: Error) => x);
+    expect(pe?.message).toContain(REMOVED);
+    expect(pe?.message).not.toContain("needs schema");
+  });
+
   it("init --targets gemini → refused before anything is read, naming the removal", () => {
     expect(() => checkInitFlags({ targets: ["claude-code", "gemini"] })).toThrow(REMOVED);
   });
@@ -127,6 +145,34 @@ describe("schema 17 and lock 6 keep loading; a gemini lock entry is an orphan", 
     const last = await syncOf(s);
     expect(last.r.lock.schema).toBe(2);
     expect(last.r.lock.files.some((f) => f.path.startsWith(".gemini/"))).toBe(false);
+  });
+
+  it("the CLI: diff names the removal in the orphan's header; drift discard removes an edited gemini file and the lock drops to 2", { timeout: atLeastWin32(60_000) }, async () => {
+    const s = await ws(17, ["claude-code"], [rule("style")]);
+    await syncOf(s);
+    const lockPath = path.join(s.wsRoot, "craftar.lock");
+    const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    const intact = "GEMINI\n";
+    const edited = "agent\n";
+    await fs.writeFile(path.join(s.wsRoot, "GEMINI.md"), intact);
+    await fs.mkdir(path.join(s.wsRoot, ".gemini", "agents"), { recursive: true });
+    await fs.writeFile(path.join(s.wsRoot, ".gemini", "agents", "r.md"), edited + "hand edit\n");
+    lock.schema = 6;
+    lock.targets = ["claude-code", "gemini"];
+    lock.files.push(
+      { path: "GEMINI.md", hash: hashNormalized(intact), target: "gemini", ingredient: "rule/*" },
+      { path: ".gemini/agents/r.md", hash: hashNormalized(edited), target: "gemini", ingredient: "agent/r" },
+    );
+    await fs.writeFile(lockPath, JSON.stringify(lock, null, 2) + "\n");
+    const d = runCli(["diff", "--workspace", s.wsRoot]);
+    expect(d.stdout).toContain("+++ GEMINI.md (forge: the gemini target was removed in craftar 1.4.0 — sync removes it)");
+    const r = runCli(["drift", "discard", ".gemini/agents/r.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(0);
+    await expect(fs.access(path.join(s.wsRoot, ".gemini", "agents", "r.md"))).rejects.toThrow();
+    await expect(fs.access(path.join(s.wsRoot, "GEMINI.md"))).rejects.toThrow();
+    const after = JSON.parse(await fs.readFile(lockPath, "utf8"));
+    expect(after.schema).toBe(2);
+    expect(after.files.some((f: { target: string }) => f.target === "gemini")).toBe(false);
   });
 
   it("the CLI: sync removes an intact gemini file and prints the fixed reason", { timeout: atLeastWin32(60_000) }, async () => {
