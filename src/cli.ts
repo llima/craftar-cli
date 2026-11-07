@@ -112,7 +112,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.1.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.2.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -398,7 +398,7 @@ program
   .option("--new-profile <name>", "create this profile in the Forge directory (recipes and targets from --like and the recipe flags), then start the workspace on it; nothing is committed")
   .option("--like <profile>", "with --new-profile: start the new profile's recipes and targets from this profile's — nothing else of it is copied")
   .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
-  .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md, cursor, copilot, agent-skills); omitted, the workspace follows the profile's")
+  .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity); omitted, the workspace follows the profile's")
   .option("--add-recipe <name>", "add a recipe to the profile's, or to the new profile's with --new-profile (repeatable)", collect, [])
   .option("--remove-recipe <name>", "remove a recipe from the profile's, or from the new profile's with --new-profile (repeatable)", collect, [])
   .option("--replace", "let --add-recipe take a slot another recipe holds", false)

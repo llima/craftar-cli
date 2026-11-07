@@ -719,6 +719,27 @@ describe("cli — drift promote", () => {
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });
 
+  it("23b. D5 (antigravity file with hint) — an antigravity rule is not promotable, with hint when claude-code writes it", async () => {
+    const s = await scenario(
+      {
+        ingredients: [rule("x", "X one\nX two\n")],
+        recipes: [recipe("base", ["rule/x"])],
+        profiles: [profile("acme", ["base"], ["claude-code", "antigravity"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 16 }));
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+    await fs.appendFile(path.join(s.wsRoot, ".agents/rules/x.md"), "hand edit\n");
+    const r = runCli(["drift", "promote", ".agents/rules/x.md", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .agents/rules/x.md is an antigravity file — promote reads only what the claude-code target wrote; edit and promote `.claude/rules/x.md` instead\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
+
   it("23. D5 (cursor file with hint) — a cursor rule is not promotable, with hint when claude-code writes it", async () => {
     // Profile targets claude-code and cursor, drift on .cursor/rules/x.mdc
     const s = await scenario(

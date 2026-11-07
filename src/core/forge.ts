@@ -10,6 +10,7 @@ import {
   type IngredientRef,
   type Profile,
   type Recipe,
+  type Target,
 } from "../schema/index.js";
 import { parseYamlText } from "./yaml-read.js";
 import { SchemaError, schemaIssues } from "./schema-fault.js";
@@ -24,8 +25,7 @@ import { readsSectionFiles, resolveSectionFiles, unnamedSectionFiles, type Secti
 import { checkLocals, ProfileLocalLoadError, readsLocalOverride, readsProfileLocal, type IgnoredLocals, type LocalLayer, type LocalRecipe } from "./profile-local.js";
 import { readsRecipeSections, recipeSectionsNearMiss } from "./recipe-sections.js";
 import { checkFamilies, familyOf, profileExtendsNearMiss, readsProfileExtends } from "./profile-extends.js";
-import { readsNativeTargets, nativeTargetNearMiss } from "./native-targets.js";
-import { isLegacyTarget } from "../schema/index.js";
+import { allowsTarget, nativeTargetNearMiss } from "./native-targets.js";
 
 export interface LoadedIngredient {
   ref: IngredientRef;
@@ -140,14 +140,11 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
     const m = lists ? null : listDeclarationNearMiss(file, params);
     if (m) throw new Error(m);
   };
-  // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor, copilot, agent-skills) in an ingredient's or profile's `targets` is a near miss.
-  const nativeGate = readsNativeTargets(manifest);
-  const checkTargets = (file: string, targets: readonly string[] | "*") => {
-    if (nativeGate || targets === "*") return;
+  // Spec 61 §7: a target below its schema gate (TARGET_SINCE) in an ingredient's or profile's `targets` is a near miss.
+  const checkTargets = (file: string, targets: readonly Target[] | "*") => {
+    if (targets === "*") return;
     for (const t of targets) {
-      if (!isLegacyTarget(t)) {
-        throw new Error(nativeTargetNearMiss(file, "targets", t));
-      }
+      if (!allowsTarget(manifest.schema, t)) throw new Error(nativeTargetNearMiss(file, "targets", t));
     }
   };
   for (const { ref, dir, meta } of await readIngredientTree(contain, path.join(root, "ingredients"), skip)) {
@@ -224,7 +221,7 @@ export async function loadForge(root: string, opts: { home?: string } = {}): Pro
           const left = await unnamedSectionFiles(folder, `profiles/${d.name}`, r.files);
           if (left.length) unnamed.set(p.name, left);
         }
-        // Spec 61 §7: below FORGE_SCHEMA_NATIVE_TARGETS, a native target (cursor, copilot, agent-skills) in a profile's `targets` is a near miss.
+        // Spec 61 §7: a target below its schema gate (TARGET_SINCE) in a profile's `targets` is a near miss.
         checkTargets(declaring, p.targets);
         profiles.set(p.name, p);
         profileFiles.set(p.name, declaring);

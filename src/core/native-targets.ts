@@ -1,50 +1,59 @@
 /**
- * Native-targets helpers (spec 61 §7).
+ * Native-targets helpers (spec 61 §7; slice 2's plan, G1).
  *
- * These functions determine whether a Forge schema is high enough to allow native targets
- * (cursor, copilot, agent-skills), and provide near-miss messages for use below the schema gate.
+ * Which Forge schema each target needs, the one comparison with it, the near miss below it, and the lock schema an owner needs.
  */
 
-import { TARGETS, LEGACY_TARGETS, type Target, type LegacyTarget, FORGE_SCHEMA_NATIVE_TARGETS } from "../schema/index.js";
+import {
+  LEGACY_TARGETS,
+  SLICE_1_TARGETS,
+  type Owner,
+  type Target,
+  FORGE_SCHEMA_NATIVE_TARGETS,
+  FORGE_SCHEMA_SLICE_2_TARGETS,
+} from "../schema/index.js";
 
 /**
- * The targets that require Forge schema 15 (FORGE_SCHEMA_NATIVE_TARGETS).
- * These are targets in TARGETS that are not in LEGACY_TARGETS.
+ * The Forge schema a Forge file needs to name each target (in an ingredient's or a profile's `targets`, or a section's `targets=`):
+ * the legacy three at every schema, slice 1's at 15, slice 2's at 16. A `Record` over every target, so a new one does not compile
+ * until its gate is written.
  */
-export const NATIVE_TARGETS = TARGETS.filter((t) => !(LEGACY_TARGETS as readonly string[]).includes(t)) as readonly Target[];
+export const TARGET_SINCE: Record<Target, number> = {
+  "claude-code": 1,
+  kiro: 1,
+  "agents-md": 1,
+  cursor: FORGE_SCHEMA_NATIVE_TARGETS,
+  copilot: FORGE_SCHEMA_NATIVE_TARGETS,
+  "agent-skills": FORGE_SCHEMA_NATIVE_TARGETS,
+  codex: FORGE_SCHEMA_SLICE_2_TARGETS,
+  antigravity: FORGE_SCHEMA_SLICE_2_TARGETS,
+};
 
-/**
- * Returns `true` when `manifest.schema` is high enough to allow native targets (cursor, copilot, agent-skills) in
- * ingredients, profiles, and section markers.
- *
- * This is the ONE comparison with FORGE_SCHEMA_NATIVE_TARGETS.
- */
-export function readsNativeTargets(manifest: { schema: number }): boolean {
-  return manifest.schema >= FORGE_SCHEMA_NATIVE_TARGETS;
+/** Whether a Forge at `schema` may name `target`. The ONE comparison with the targets' gates. */
+export function allowsTarget(schema: number, target: Target): boolean {
+  return schema >= TARGET_SINCE[target];
 }
 
 /**
- * Returns the near-miss message for a native target found below the schema gate.
- * Used by `loadForge` (key: `targets`) and section pass (key: `section <name> targets=`)
- * to produce consistent error messages.
+ * The near-miss message for a target named below its gate. Used by `loadForge` (key: `targets`) and the section pass
+ * (key: `section <name> targets=`), so both say the same.
  *
  * @param file - The file where the target was found (Forge-relative path), or null to omit the file prefix
  * @param key - The context key (e.g. "targets" or "section tone targets=")
- * @param target - The native target that was found
- * @returns The error message to display
+ * @param target - The target that was found
  */
-export function nativeTargetNearMiss(file: string | null, key: string, target: string): string {
+export function nativeTargetNearMiss(file: string | null, key: string, target: Target): string {
   const prefix = file ? `${file}: ` : "";
-  return `${prefix}${key}: ${target} needs schema: ${FORGE_SCHEMA_NATIVE_TARGETS} in craftar.forge.yaml`;
+  return `${prefix}${key}: ${target} needs schema: ${TARGET_SINCE[target]} in craftar.forge.yaml`;
 }
 
 /**
- * Returns the first native target found in a list, or `null` if all are legacy targets.
- * Used by the sync to decide whether to write lock schema 4.
+ * The lock schema an owner needs (spec 61 §7, slice 2's G1): 2 for a legacy target, 3 for `services`, 4 for a slice-1 target,
+ * 5 for any later one. `apply()` writes the highest its targets and entries need.
  */
-export function firstNewTarget(targets: readonly string[]): Target | null {
-  for (const t of targets) {
-    if ((NATIVE_TARGETS as readonly string[]).includes(t)) return t as Target;
-  }
-  return null;
+export function lockSchemaFor(owner: Owner): 2 | 3 | 4 | 5 {
+  if (owner === "services") return 3;
+  if ((LEGACY_TARGETS as readonly string[]).includes(owner)) return 2;
+  if ((SLICE_1_TARGETS as readonly string[]).includes(owner)) return 4;
+  return 5;
 }

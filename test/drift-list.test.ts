@@ -75,4 +75,19 @@ describe("driftList", () => {
       [".cursor/mcp.json", false, ".mcp.json"],
     ]);
   });
+
+  it("slice 2: a codex or an antigravity file is not promotable either, and their MCP file reads .mcp.json", () => {
+    const rows = driftList([
+      drift(".codex/agents/x.toml", "codex", "agent/x", "old\n", "new\n"),
+      drift(".agents/rules/x.md", "antigravity", "rule/x", "old\n", "new\n"),
+      drift(".agents/agents/x.md", "antigravity", "agent/x", "old\n", "new\n"),
+      drift(".agents/mcp_config.json", "antigravity", "mcp/*", "old\n", "new\n"),
+    ]);
+    expect(rows.map((r) => [r.path, r.promotable, r.reason])).toEqual([
+      [".codex/agents/x.toml", false, "codex file"],
+      [".agents/rules/x.md", false, "antigravity file"],
+      [".agents/agents/x.md", false, "antigravity file"],
+      [".agents/mcp_config.json", false, ".mcp.json"],
+    ]);
+  });
 });

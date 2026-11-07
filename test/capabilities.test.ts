@@ -15,13 +15,14 @@ import { emitFor, plan, loadWorkspace } from "../src/core/sync.js";
 import { toLf, stripBom } from "../src/core/text.js";
 import { mcpServers } from "../src/emitters/shared.js";
 import { profile, recipe, scenario, tmpDir, writeFiles, makeWorkspace, type IngredientSpec } from "./helpers/forge.js";
-import { INGREDIENT_TYPES, LEGACY_TARGETS, TARGETS, isLegacyTarget, type IngredientType, type Target } from "../src/schema/index.js";
+import { INGREDIENT_TYPES, TARGETS, isLegacyTarget, type IngredientType, type Target } from "../src/schema/index.js";
+import { allowsTarget } from "../src/core/native-targets.js";
 import type { EmitBase, Emitter, PlannedFile } from "../src/emitters/types.js";
 
 /**
  * Creates a Forge with one ingredient per type (two skills: dir and file layout), each with
  * `targets: "*"` and a unique output name, and every body referencing `.claude/rules/cite-me.md`.
- * @param schema The Forge schema version to use (1 for legacy targets, 15 for cursor)
+ * @param schema The Forge schema version to use (1 for legacy targets, 16 for every native target)
  */
 async function makeCapabilityForge(root: string, schema: number): Promise<void> {
   // Create the forge manifest with the specified schema
@@ -71,6 +72,10 @@ async function makeCapabilityForge(root: string, schema: number): Promise<void> 
     {
       meta: { type: "mcp", name: "cap-mcp", targets: "*", authEnv: ["CAP_TOKEN"], server: { command: "npx", args: ["cap-server"], env: { TOKEN: "${CAP_TOKEN}" } } },
     },
+    // mcp — a remote server (spec 61 slice 2: antigravity writes its url as serverUrl)
+    {
+      meta: { type: "mcp", name: "cap-remote", targets: "*", server: { url: "https://mcp.example.com/mcp" } },
+    },
     // script
     {
       meta: { type: "script", name: "cap-script", targets: "*", files: ["run.ps1"] },
@@ -104,8 +109,8 @@ async function makeCapabilityForge(root: string, schema: number): Promise<void> 
   const allRefs = ingredients.map((ing) => `${ing.meta.type}/${ing.meta.name}`);
   await writeFiles(root, { "recipes/all.yaml": YAML.stringify({ name: "all", ingredients: allRefs }) });
 
-  // Create a profile - use LEGACY_TARGETS for schema < 15, TARGETS for schema >= 15
-  const profileTargets = schema < 15 ? LEGACY_TARGETS.slice() : TARGETS.slice();
+  // Create a profile naming every target the Forge's schema allows (spec 61 §7)
+  const profileTargets = TARGETS.filter((t) => allowsTarget(schema, t));
   await writeFiles(root, { "profiles/test/profile.yaml": YAML.stringify({ name: "test", recipes: ["all"], targets: profileTargets }) });
 }
 
@@ -302,13 +307,13 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
   let legacyForgeRoot: string;
   let cursorForgeRoot: string;
 
-  // Set up the shared Forges once - schema 1 for legacy, schema 15 for cursor
+  // Set up the shared Forges once - schema 1 for legacy, schema 16 for every native target (slice 1 and slice 2)
   beforeAll(async () => {
     root = await tmpDir("craftar-capabilities-");
     legacyForgeRoot = path.join(root, "forge-legacy");
     cursorForgeRoot = path.join(root, "forge-cursor");
     await makeCapabilityForge(legacyForgeRoot, 1);
-    await makeCapabilityForge(cursorForgeRoot, 15);
+    await makeCapabilityForge(cursorForgeRoot, 16);
   });
 
   afterAll(async () => {
@@ -346,7 +351,9 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               ? ["skill/cap-skill-dir", "skill/cap-skill-file"]
               : type === "rule"
                 ? ["rule/cap-rule", "rule/cap-rule-scoped"]
-                : [`${type}/cap-${type}`];
+                : type === "mcp"
+                  ? ["mcp/cap-mcp", "mcp/cap-remote"]
+                  : [`${type}/cap-${type}`];
 
           // Collect all files for this cell:
           // - Files whose `ingredient` is one of the fixture refs AND `target` is this target
@@ -451,21 +458,16 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
             let allAsHeld = true;
 
             for (const f of cellFiles) {
-              // Find the ingredient for this file
-              // For shared files, pick any matching fixture ingredient for the check
-              let ingRef: string;
-              if (f.ingredient === "rule/*" || f.ingredient === "mcp/*") {
-                ingRef = fixtureRefs[0]; // Any fixture ref of this type
-              } else {
-                ingRef = f.ingredient;
+              // Find the ingredients for this file: a shared MCP file holds every fixture server, each judged; a shared rule
+              // file, any fixture ref of the type
+              const ingRefs = f.ingredient === "mcp/*" ? fixtureRefs : f.ingredient === "rule/*" ? [fixtureRefs[0]] : [f.ingredient];
+              for (const ingRef of ingRefs) {
+                const ing = forge.ingredients.get(ingRef);
+                if (!ing) continue;
+                const outName = ingRef.split("/")[1];
+                const asHeld = await isAsHeld(f, ing, type, outName);
+                if (!asHeld) allAsHeld = false;
               }
-
-              const ing = forge.ingredients.get(ingRef);
-              if (!ing) continue;
-
-              const outName = ingRef.split("/")[1];
-              const asHeld = await isAsHeld(f, ing, type, outName);
-              if (!asHeld) allAsHeld = false;
             }
 
             if (cap.state === "native") {
@@ -521,6 +523,8 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
           const isAllowed =
             c.note === "skipped with a warning when aimed at this target" ||
             c.note?.startsWith("through agent-skills: ") ||
+            c.note?.startsWith("through agents-md: ") ||
+            c.note?.startsWith("not written: ") ||
             c.note?.startsWith("not written yet: ");
           if (!isAllowed) bad.push(`${t} · ${ty} (unsupported note not in allow-list: ${c.note})`);
         }
