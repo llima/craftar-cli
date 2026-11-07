@@ -492,14 +492,18 @@
           "note": "through agents-md: OpenCode reads AGENTS.md, written by the agents-md target"
         },
         "agent": {
-          "state": "unsupported",
-          "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "state": "converted",
+          "output": [
+            ".opencode/agents/<name>.md"
+          ],
+          "note": "description, mode subagent and model (only in OpenCode's provider/model form); tools become OpenCode permissions — deny everything, then allow each tool the table maps, a tool or a scope it cannot map left denied with a warning; needs OpenCode 2 or later"
         },
         "command": {
-          "state": "unsupported",
-          "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "state": "converted",
+          "output": [
+            ".opencode/commands/<name>.md"
+          ],
+          "note": "description and the body, whose $ARGUMENTS OpenCode reads as Claude Code does; argument-hint and allowed-tools have no OpenCode field and are dropped with a warning"
         },
         "skill": {
           "state": "unsupported",
@@ -507,9 +511,11 @@
           "note": "through agent-skills: OpenCode reads .agents/skills/, written by the agent-skills target (a folder skill is also read from .claude/skills/ when claude-code writes it)"
         },
         "mcp": {
-          "state": "unsupported",
-          "output": [],
-          "note": "skipped with a warning when aimed at this target"
+          "state": "converted",
+          "output": [
+            ".opencode/opencode.json"
+          ],
+          "note": "a file of craftar's own holding only $schema and mcp.servers, which OpenCode merges after the root opencode.json: command and args become one command array, env becomes environment, ${NAME} becomes {env:NAME}; cwd, timeout, disabled and oauth kept, any other key dropped with a warning"
         },
         "script": {
           "state": "unsupported",

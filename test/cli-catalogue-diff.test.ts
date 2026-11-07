@@ -360,7 +360,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(gl.find((l) => l.includes("rule/gone"))).toMatch(/^  ✗ rule\/gone\s+not in this Forge$/);
   });
 
-  it("text mode: targets header, matrix, legend and one paths line per writing cell (29) plus services", async () => {
+  it("text mode: targets header, matrix, legend and one paths line per writing cell (32) plus services", async () => {
     const s = await cat();
     const r = runCli(["targets"], { cwd: s.wsRoot });
     expect(r.code).toBe(0);
@@ -370,10 +370,10 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(at).toBeGreaterThan(0);
     expect(norm.slice(at + 1, at + 10)).toEqual([
       "rule native converted converted converted converted unsupported unsupported converted unsupported",
-      "agent native converted unsupported converted converted unsupported converted converted unsupported",
-      "command native converted unsupported unsupported converted converted unsupported unsupported unsupported",
+      "agent native converted unsupported converted converted unsupported converted converted converted",
+      "command native converted unsupported unsupported converted converted unsupported unsupported converted",
       "skill native converted unsupported unsupported unsupported converted unsupported unsupported unsupported",
-      "mcp native native unsupported converted converted unsupported unsupported converted unsupported",
+      "mcp native native unsupported converted converted unsupported unsupported converted converted",
       "script native unsupported unsupported unsupported unsupported unsupported unsupported unsupported unsupported",
       "steering unsupported native unsupported unsupported unsupported unsupported unsupported unsupported unsupported",
       "hook native unsupported unsupported unsupported unsupported unsupported converted converted unsupported",
@@ -396,10 +396,12 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "copilot · agent .github/agents/<name>.agent.md — name, description and model kept; tools mapped to Copilot's aliases (read, edit, search, execute, web, agent, todo), a tool with no alias dropped with a warning",
       "codex · agent .codex/agents/<name>.toml — name, description and developer_instructions (the body) in TOML; model and tools are not written (the Forge's names are Claude Code's), dropped with a warning",
       "antigravity · agent .agents/agents/<name>.md — name, description and model kept, model written as inherit unless it is inherit, flash or pro; tools are not written (Antigravity's tool names are not measured), dropped with a warning",
+      "opencode · agent .opencode/agents/<name>.md — description, mode subagent and model (only in OpenCode's provider/model form); tools become OpenCode permissions — deny everything, then allow each tool the table maps, a tool or a scope it cannot map left denied with a warning; needs OpenCode 2 or later",
       "claude-code · command .claude/commands/<name>.md",
       "kiro · command .kiro/steering/commands/<name>.md — written as manual steering; .claude/rules/ references resolved as for a rule, in the body and the description",
       "copilot · command .github/prompts/<name>.prompt.md — written as a VS Code prompt file with description, argument-hint and agent: agent, which the Copilot CLI does not read; with agent-skills among the targets, a command with the default targets is left to .agents/skills/, which both read",
       "agent-skills · command .agents/skills/<name>/SKILL.md — written as a skill only a person invokes (disable-model-invocation: true), read by every tool that reads .agents/skills/; a command and a skill with one name fail the plan",
+      "opencode · command .opencode/commands/<name>.md — description and the body, whose $ARGUMENTS OpenCode reads as Claude Code does; argument-hint and allowed-tools have no OpenCode field and are dropped with a warning",
       "claude-code · skill .claude/skills/<name>/<file>, .claude/skills/<name>.md",
       "kiro · skill .kiro/skills/<name>/<file> — in its text files (.md, .txt, .json, .yaml, .yml), .claude/rules/ references resolved as for a rule; other files are copied as they are; a single-file skill becomes <name>/SKILL.md",
       "agent-skills · skill .agents/skills/<name>/<file> — copied into .agents/skills/<name>/; a single-file skill becomes <name>/SKILL.md",
@@ -408,6 +410,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "cursor · mcp .cursor/mcp.json — the servers under mcpServers; a ${NAME} reference becomes ${env:NAME}",
       "copilot · mcp .vscode/mcp.json, .github/mcp.json — the servers in two files, each server kept whole: .vscode/mcp.json under servers (VS Code's key), a ${NAME} reference written ${env:NAME}; .github/mcp.json under mcpServers, ${NAME} kept, for the Copilot CLI, which never reads .vscode/mcp.json",
       "antigravity · mcp .agents/mcp_config.json — the servers under mcpServers, each kept whole; a remote server's url becomes serverUrl",
+      "opencode · mcp .opencode/opencode.json — a file of craftar's own holding only $schema and mcp.servers, which OpenCode merges after the root opencode.json: command and args become one command array, env becomes environment, ${NAME} becomes {env:NAME}; cwd, timeout, disabled and oauth kept, any other key dropped with a warning",
       "claude-code · script .claude/scripts/<file>",
       "kiro · steering .kiro/steering/<name>.md",
       "claude-code · hook .claude/hooks/<file>, .claude/settings.craftar.example.json — the registration is written to .claude/settings.craftar.example.json, to copy",
