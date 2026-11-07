@@ -22,7 +22,7 @@ import type { EmitBase, Emitter, PlannedFile } from "../src/emitters/types.js";
 /**
  * Creates a Forge with one ingredient per type (two skills: dir and file layout), each with
  * `targets: "*"` and a unique output name, and every body referencing `.claude/rules/cite-me.md`.
- * @param schema The Forge schema version to use (1 for legacy targets, 16 for every native target)
+ * @param schema The Forge schema version to use (1 for legacy targets, 17 for every native target)
  */
 async function makeCapabilityForge(root: string, schema: number): Promise<void> {
   // Create the forge manifest with the specified schema
@@ -312,13 +312,13 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
   let legacyForgeRoot: string;
   let cursorForgeRoot: string;
 
-  // Set up the shared Forges once - schema 1 for legacy, schema 16 for every native target (slice 1 and slice 2)
+  // Set up the shared Forges once - schema 1 for legacy, schema 17 for every native target (slices 1 to 3)
   beforeAll(async () => {
     root = await tmpDir("craftar-capabilities-");
     legacyForgeRoot = path.join(root, "forge-legacy");
     cursorForgeRoot = path.join(root, "forge-cursor");
     await makeCapabilityForge(legacyForgeRoot, 1);
-    await makeCapabilityForge(cursorForgeRoot, 16);
+    await makeCapabilityForge(cursorForgeRoot, 17);
   });
 
   afterAll(async () => {
@@ -374,7 +374,7 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               continue;
             }
             // Shared files: AGENTS.md belongs to type=rule (agents-md); copilot-instructions.md for copilot
-            if (type === "rule" && f.ingredient === "rule/*" && (f.path === "AGENTS.md" || f.path === ".github/copilot-instructions.md")) {
+            if (type === "rule" && f.ingredient === "rule/*" && (f.path === "AGENTS.md" || f.path === ".github/copilot-instructions.md" || f.path === "GEMINI.md")) {
               cellFiles.push(f);
               continue;
             }

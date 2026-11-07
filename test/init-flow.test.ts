@@ -426,8 +426,8 @@ const QF = "Forge — a directory or a git URL: ";
 const QP = "Profile: ";
 const QP1 = "Profile [acme]: ";
 const QA = "Adjust the recipes [no]: ";
-const QT = "Targets — claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, separated by commas [claude-code, from the profile]: ";
-const QTk = "Targets — claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, separated by commas [kiro, from the profile]: ";
+const QT = "Targets — claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, gemini, separated by commas [claude-code, from the profile]: ";
+const QTk = "Targets — claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, gemini, separated by commas [kiro, from the profile]: ";
 
 /** Setup for askInit tests. */
 async function askSetup(spec: ForgeSpec = SPEC_DESC) {
@@ -1102,7 +1102,7 @@ describe("askInit", () => {
     // "nope" → N7, then "kiro"
     const sc4 = script([s.forge, "", "", "nope", "kiro"]);
     const result4 = await askInit(s.ws, given, local, sc4.io, { home: s.home, registryOff: false, exists: existsSync });
-    expect(sc4.said.find((l) => l.includes("nope"))).toBe('unknown target "nope" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity)');
+    expect(sc4.said.find((l) => l.includes("nope"))).toBe('unknown target "nope" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, gemini)');
     expect(result4.kind).toBe("answered");
     if (result4.kind !== "answered") throw new Error("unexpected");
     expect(result4.input.targets).toEqual(["kiro"]);

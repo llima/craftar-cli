@@ -16,10 +16,11 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
 
 /**
  * The MCP file each target writes (spec 42 §5.2: shared by the emitters and doctor's mcp-launcher).
- * agents-md, agent-skills and codex write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` is shared, D5),
+ * agents-md, agent-skills, codex and gemini write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` and
+ * gemini's `.gemini/settings.json` are shared, D5),
  * so they have no entries.
  */
-export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex" | "gemini">, string>;
 
 /** What effectiveTargets reads of a resolution: agents-md.primary and the workspace's targets. */
 export interface TargetsView {
@@ -35,7 +36,9 @@ const CARRIED: ReadonlyArray<{ carrier: Target; writtenTo: string; skippers: rea
   // §6.1: an always-on rule with the default targets is left to AGENTS.md, which Cursor and Copilot read.
   { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["cursor", "copilot", "antigravity"], concerns: (m) => m.type === "rule" && m.inclusion === "always" && m.targets === "*" },
   // §9: a command with the default targets is left to .agents/skills/, which Copilot reads; a command listed [copilot] keeps its prompt file.
-  { carrier: "agent-skills", writtenTo: ".agents/skills/", skippers: ["copilot"], concerns: (m) => m.type === "command" && m.targets === "*" },
+  { carrier: "agent-skills", writtenTo: ".agents/skills/", skippers: ["copilot", "gemini"], concerns: (m) => m.type === "command" && m.targets === "*" },
+  // Slice 3: GEMINI.md imports AGENTS.md (`@AGENTS.md`), so every rule with the default targets — any inclusion — is left to it.
+  { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["gemini"], concerns: (m) => m.type === "rule" && m.targets === "*" },
 ];
 
 /**
@@ -47,6 +50,8 @@ export function carriedPath(target: string, meta: Ingredient, ref: string): { pa
   if (target === "antigravity" && meta.type === "rule") return { path: `.agents/rules/${outName(meta)}.md`, ingredient: ref };
   if (target === "copilot" && meta.type === "rule") return { path: ".github/copilot-instructions.md", ingredient: "rule/*" };
   if (target === "copilot" && meta.type === "command") return { path: `.github/prompts/${outName(meta)}.prompt.md`, ingredient: ref };
+  if (target === "gemini" && meta.type === "command") return { path: `.gemini/commands/${outName(meta)}.toml`, ingredient: ref };
+  // A gemini rule left to AGENTS.md has no file of its own: GEMINI.md, which imports AGENTS.md, is written either way.
   return null;
 }
 
@@ -150,13 +155,13 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: T
 }
 
 /** The new targets' own modes (spec 61 §10): K1 is the file the citing target itself writes (codex writes none), then claude-code's, then AGENTS.md. */
-export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity";
+export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity" | "gemini";
 /** Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target's own mode (spec 61 §10). */
 export type RefMode = "agents-md" | "kiro" | OwnMode;
 
 /** Whether a reference mode is a new target's own mode. */
 export function isOwnMode(mode: RefMode): mode is OwnMode {
-  return mode === "cursor" || mode === "copilot" || mode === "codex" || mode === "antigravity";
+  return mode === "cursor" || mode === "copilot" || mode === "codex" || mode === "antigravity" || mode === "gemini";
 }
 
 /**
@@ -164,7 +169,8 @@ export function isOwnMode(mode: RefMode): mode is OwnMode {
  * an always-on or a scoped one (it skips a manual or an auto rule), codex none (it reads AGENTS.md only).
  */
 function ownWrites(mode: OwnMode, meta: Ingredient): boolean {
-  if (meta.type !== "rule" || mode === "codex") return false;
+  // Codex reads AGENTS.md only; GEMINI.md holds Gemini's rules but names no rule's own file, so neither writes one to point at.
+  if (meta.type !== "rule" || mode === "codex" || mode === "gemini") return false;
   return mode === "cursor" || mode === "antigravity" || meta.inclusion === "always" || meta.inclusion === "fileMatch";
 }
 
@@ -642,7 +648,7 @@ export function ruleFile(target: "claude-code" | "kiro" | OwnMode, m: { name: st
   if (target === "cursor") return `.cursor/rules/${outName(m)}.mdc`;
   if (target === "antigravity") return `.agents/rules/${outName(m)}.md`;
   // Codex writes no rule file (it reads AGENTS.md), so no state names one for it (ownWrites).
-  if (target === "codex") throw new Error("internal: codex writes no rule file");
+  if (target === "codex" || target === "gemini") throw new Error(`internal: ${target} writes no rule file of its own`);
   // Copilot joins every always-on rule into one file (spec 61 §5.2)
   if (target === "copilot") return m.inclusion === "always" ? ".github/copilot-instructions.md" : `.github/instructions/${outName(m)}.instructions.md`;
   return target === "claude-code" ? `.claude/rules/${outName(m)}.md` : `.kiro/steering/${outName(m)}.md`;
