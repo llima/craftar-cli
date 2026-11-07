@@ -114,13 +114,16 @@ describe("GEMINI.md", () => {
 
   it("review 3: with claude-code and agents-md, a scoped rule only kiro writes is named by its steering file, in a body and in the index", async () => {
     const p = await planOf(await ws(17, ["claude-code", "agents-md", "kiro", "gemini"], [
-      rule("idx", { targets: ["gemini"] }, "See .claude/rules/api.md.\n\n{{craftar.rules.index}}\n"),
+      rule("idx", { targets: ["gemini"] }, "See .claude/rules/api.md, [api](.claude/rules/api.md#x) and .claude/rules/k.md.\n\n{{craftar.rules.index}}\n"),
       rule("api", { inclusion: "fileMatch", fileMatchPattern: "src/**", description: "API", targets: ["agents-md", "kiro", "gemini"] }),
+      rule("k", { inclusion: "fileMatch", fileMatchPattern: "k/**", description: "K", targets: ["kiro"] }),
     ]));
     const t = text(p, "GEMINI.md");
-    expect(t).toContain("See .kiro/steering/api.md.");
+    expect(t).toContain("See .kiro/steering/api.md, [api](.kiro/steering/api.md#x) and .kiro/steering/k.md.");
     expect(t).toContain("`.kiro/steering/api.md`");
+    expect(t).toContain("`.kiro/steering/k.md`");
     expect(t).not.toContain("AGENTS.md (rule: api)");
+    expect(t).not.toContain("rule not in this workspace");
   });
 
   it("review: the rules index in GEMINI.md names a rule's place there; a placeholder not alone on its line is the misplaced warning", async () => {
