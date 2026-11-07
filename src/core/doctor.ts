@@ -17,7 +17,7 @@ import { paramsFor } from "./resolve.js";
 import { SchemaError, errorText } from "./schema-fault.js";
 import { LOCK_FILE, declaredWithoutValue, overrideConflictLine, loadForgeFor, plan, readLock, readWorkspaceConfig, status, claudeMdBlockedMessage, type LoadOptions, type MergedConfig, type Plan, type Workspace, AGENTS_MD_BUDGET_KEY, agentsMdOverBudgetMessage, agentsMdOverDefaultMessage, AGENTS_MD_BUDGET_FIX, AGENTS_MD_SHRINK, type FileStatus } from "./sync.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { outName, MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
+import { outName, MCP_FILE, COPILOT_CLI_MCP_FILE, EXAMPLE_SETTINGS, flatSkills, flatSkillWarning } from "../emitters/shared.js";
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
 import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersionInOwnDir, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, GLOBAL_JSON_REFUSED, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
@@ -601,7 +601,7 @@ export function oneLine(e: unknown): string {
 
 /**
  * Every target's written MCP servers, rendered at schema 4 as mcp-env reads them: [outName, server, authEnv, file, substituted], in plan order.
- * A target with no entry in MCP_FILE (agents-md, agent-skills, codex) is skipped.
+ * A target with no entry in MCP_FILE (agents-md, agent-skills, codex) is skipped; copilot's servers are returned once per file it writes.
  * At schema 4, the server is rendered first, and its substituted leaves are returned with it so that mcpUnset leaves a
  * value a param was substituted into unread (E24.4): no part of a param's value reaches the report.
  */
@@ -625,6 +625,8 @@ function writtenServers(p: Plan, schema: ForgeSchema): Array<[string, unknown, s
       }
     }
     for (const [name, { server, authEnv, substituted }] of perTarget) servers.push([name, server, authEnv, file, substituted]);
+    // copilot writes the same servers a second time, for the Copilot CLI; mcp-env dedups by server and variable.
+    if (target === "copilot") for (const [name, { server, authEnv, substituted }] of perTarget) servers.push([name, server, authEnv, COPILOT_CLI_MCP_FILE, substituted]);
   }
   return servers;
 }
