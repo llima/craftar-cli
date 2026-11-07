@@ -32,7 +32,7 @@ import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { decodeForScan } from "./secrets.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
-import { appliesTo, carriedPath, carriedTo, carrierFile, effectiveTargets } from "../emitters/shared.js";
+import { appliesTo, carriedPath, carriedTo, carrierFile, effectiveTargets, GEMINI_MD } from "../emitters/shared.js";
 import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
 import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
@@ -998,7 +998,7 @@ export async function plan(ws: Workspace): Promise<Plan> {
     const misplacedLocations: string[] = [];
     const isRuleOrSteeringOrAgentsMd = (p: string) =>
       p === "AGENTS.md" ||
-      p === "GEMINI.md" ||
+      p === GEMINI_MD ||
       p === ".github/copilot-instructions.md" ||
       /^\.claude\/rules\/[^/]+\.md$/.test(p) ||
       /^\.kiro\/steering\/[^/]+\.md$/.test(p) ||

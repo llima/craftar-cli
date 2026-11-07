@@ -102,6 +102,16 @@ describe("GEMINI.md", () => {
     expect(p.warnings.filter((w) => w.startsWith("gemini:"))).toEqual([]);
   });
 
+  it("review 2: a scoped rule GEMINI.md only lists (kiro writes it) is named by its steering file; a GEMINI.md link drops its fragment", async () => {
+    const p = await planOf(await ws(17, ["kiro", "gemini"], [
+      rule("only", {}, "See .claude/rules/api.md, [api](.claude/rules/api.md#x) and [style](.claude/rules/style.md#y).\n"),
+      rule("api", { inclusion: "fileMatch", fileMatchPattern: "src/**" }),
+      rule("style", { targets: ["gemini"] }),
+    ]));
+    expect(text(p, "GEMINI.md")).toContain("See .kiro/steering/api.md, [api](.kiro/steering/api.md#x) and [style](GEMINI.md).");
+    expect(text(p, "GEMINI.md")).toContain("- `.kiro/steering/api.md` — applies to `src/**`");
+  });
+
   it("review: the rules index in GEMINI.md names a rule's place there; a placeholder not alone on its line is the misplaced warning", async () => {
     const indexed = await planOf(await ws(17, ["gemini"], [rule("idx", {}, "Rules:\n{{craftar.rules.index}}\n"), rule("style", { description: "Style" })]));
     expect(text(indexed, "GEMINI.md")).toContain("GEMINI.md (rule: style)");
