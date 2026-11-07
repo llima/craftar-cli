@@ -373,11 +373,6 @@ const writtenIs: [
 void writtenIs;
 
 /**
- * How a target words the warning for a type it does not write, and the "through X" cells (spec 61 §6.1): a type another
- * target writes into a file this tool reads is warned unless that carrier is among the workspace's targets and the ingredient
- * is aimed at it. Not part of `targets --json`.
- */
-/**
  * A carrier of a "through X" cell: a target, or a target that carries only some ingredients of the type (`only`) — `claude-code`
  * carries a skill to OpenCode only in folder form, since a flat `.claude/skills/<name>.md` was not shown to be read (spec 63 §4).
  */
@@ -389,6 +384,11 @@ const FOLDER_SKILLS_OF_CLAUDE_CODE: Carrier = {
   only: (ing, resolution) => !flatSkills(resolution, resolution.targets).includes(outName(ing.meta)),
 };
 
+/**
+ * How a target words the warning for a type it does not write, and the "through X" cells (spec 61 §6.1): a type another
+ * target writes into a file this tool reads is warned unless that carrier is among the workspace's targets and the ingredient
+ * is aimed at it. Not part of `targets --json`.
+ */
 const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Carrier | readonly Carrier[]>> }> = {
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },

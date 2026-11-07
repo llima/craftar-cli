@@ -164,12 +164,12 @@ describe("opencode MCP (spec 63 §8)", () => {
     expect(ow(p)).toEqual([
       'opencode: MCP server "tracker": key "alwaysAllow" has no OpenCode field; dropped',
       'opencode: MCP server "tracker": ${workspaceFolder} has no OpenCode form; left as written',
-      'opencode: MCP server "odd": type "websocket" has no OpenCode form; skipped',
+      'opencode: MCP server "odd": its type has no OpenCode form; skipped',
       'opencode: MCP server "nourl": no url for a remote server; skipped',
     ]);
   });
 
-  it("8. sync, then a hand edit: drift; a hand-written .opencode/opencode.json before the first sync is a collision", T, async () => {
+  it("8. a hand-written .opencode/opencode.json before the first sync is a collision; once removed, sync writes it at lock schema 7", T, async () => {
     const s = await ws(["opencode"], [mcp("tracker", { command: "npx" }), agent({})]);
     await fs.mkdir(path.join(s.wsRoot, ".opencode"), { recursive: true });
     await fs.writeFile(path.join(s.wsRoot, ".opencode", "opencode.json"), '{"model":"acme/x"}\n');
@@ -233,5 +233,19 @@ describe("rule references (spec 63 §9)", () => {
     expect(await body(["opencode", "claude-code"])).toBe("See .claude/rules/style.md.\n");
     expect(await body(["opencode", "agents-md"])).toBe("See AGENTS.md (rule: style).\n");
     expect(await body(["opencode"])).toBe("See style (rule not in this workspace).\n");
+  });
+});
+
+describe("review round 1 (spec 63 §6, §8)", () => {
+  it("12. a path scope with a .. segment, a backslash or nothing left is untranslatable", T, async () => {
+    const p = await planOf(await ws(["opencode"], [agent({ tools: ["Read(./../x)", "Read(src/..)", "Read(src\\**)", "Read(//)", "Read(/)", "Read(./)", "Read(src/**)"] })]));
+    expect(ow(p)).toEqual(["Read(./../x)", "Read(src/..)", "Read(src\\**)", "Read(//)", "Read(/)", "Read(./)"].map((t) => `opencode: agent "reviewer": tool "${t}": its scope cannot be translated; no rule written`));
+    expect(fileOf(p, ".opencode/agents/reviewer.md")).toContain('resource: "src/**"');
+  });
+
+  it("13. every server skipped: no .opencode/opencode.json is planned", T, async () => {
+    const p = await planOf(await ws(["opencode"], [{ meta: { type: "mcp", name: "odd", server: { type: "websocket", url: "wss://x.test" } } }]));
+    expect(p.files.some((f) => f.path === ".opencode/opencode.json")).toBe(false);
+    expect(ow(p)).toEqual(['opencode: MCP server "odd": its type has no OpenCode form; skipped']);
   });
 });

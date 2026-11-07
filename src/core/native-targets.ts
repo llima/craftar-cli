@@ -62,5 +62,7 @@ export function lockSchemaFor(owner: LockOwner): 2 | 3 | 4 | 5 | 6 | 7 {
   if ((SLICE_1_TARGETS as readonly string[]).includes(owner)) return 4;
   if ((SLICE_2_TARGETS as readonly string[]).includes(owner)) return 5;
   if (owner === REMOVED_TARGET) return 6;
-  return 7;
+  if (owner === "opencode") return 7;
+  // A target added later needs its own lock schema and branch here (spec 63 §10), never this one's silently.
+  throw new Error(`internal: no lock schema for ${owner}`);
 }

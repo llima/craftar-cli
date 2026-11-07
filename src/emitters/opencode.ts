@@ -75,8 +75,11 @@ export const opencode: Emitter<"opencode"> = {
         servers[key] = envReferences(shaped, "opencode", left);
         for (const name of [...new Set(left)]) ctx.warn(`opencode: MCP server "${key}": \${${name}} has no OpenCode form; left as written`);
       }
-      const doc = { $schema: OPENCODE_SCHEMA, mcp: { servers } };
-      out.push(await textFile(ctx, MCP_FILE.opencode, JSON.stringify(doc, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
+      // Every server skipped: no file, so an empty craftar file neither collides with nor draws `opencode mcp add` into it.
+      if (Object.keys(servers).length > 0) {
+        const doc = { $schema: OPENCODE_SCHEMA, mcp: { servers } };
+        out.push(await textFile(ctx, MCP_FILE.opencode, JSON.stringify(doc, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
+      }
     }
     return out;
   },
@@ -99,7 +102,8 @@ function reshapeServer(key: string, raw: unknown, ctx: EmitBase): Record<string,
   else if (type === "stdio" || type === "local") kind = "local";
   else if (type === "http" || type === "sse" || type === "remote") kind = "remote";
   else {
-    ctx.warn(`opencode: MCP server "${key}": type ${JSON.stringify(type)} has no OpenCode form; skipped`);
+    // The type may be a rendered value (spec 34): the warning names the server only.
+    ctx.warn(`opencode: MCP server "${key}": its type has no OpenCode form; skipped`);
     return null;
   }
   const out: Record<string, unknown> = { type: kind };
@@ -249,12 +253,18 @@ function scopeResource(kind: ScopeKind, scope: string): string | null {
       return m ? `https://${m[1]}/*` : null;
     }
     case "path": {
-      if (s.startsWith("//")) return s.slice(1);
-      if (s.startsWith("~/")) return s;
-      if (s.startsWith("./")) return s.slice(2) || null;
-      if (s.startsWith("/")) return s.slice(1) || null;
-      if (s.startsWith("~") || s.startsWith("../") || s === ".." || s.includes("/../") || s.startsWith("\\")) return null;
-      return s;
+      // Claude Code's spellings, prefix first: `//x` absolute, `~/x` home, `./x` and `/x` project-relative, a bare `x` relative.
+      if (s.includes("\\")) return null;
+      let out: string;
+      if (s.startsWith("//")) out = s.slice(1);
+      else if (s.startsWith("~/")) out = s;
+      else if (s.startsWith("./")) out = s.slice(2);
+      else if (s.startsWith("/")) out = s.slice(1);
+      else if (s.startsWith("~")) return null;
+      else out = s;
+      const rest = out.startsWith("~/") ? out.slice(2) : out.startsWith("/") ? out.slice(1) : out;
+      if (rest === "" || rest.split("/").some((seg) => seg === "..")) return null;
+      return out;
     }
   }
 }
