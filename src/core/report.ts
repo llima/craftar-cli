@@ -32,6 +32,8 @@ export function diffShows(state: FileState): boolean {
 export const EXAMPLE_CONTENT_HIDDEN = "content not shown: an example file may hold a value typed by hand";
 /** Spec 35 §4.5: what `craftar mcp` says in place of the disk side of a hand-touched MCP file. */
 export const MCP_CONTENT_HIDDEN = "content not shown: an MCP configuration file may hold a value typed by hand";
+/** The note of the `diff` tool of `craftar mcp` for a hand-edited hooks file of codex or antigravity (`hook/*`, spec 61 slice 3). */
+export const HOOKS_CONTENT_HIDDEN = "content not shown: a hooks file may hold a value typed by hand";
 
 /** A path as the user may type it, to the spelling `status` prints: forward slashes, no leading `./`. */
 export const statusPath = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
@@ -127,8 +129,8 @@ export interface DiffRow {
 /**
  * What `diff` shows for each row in a state `sync --check` refuses (spec 19 §3.2: `unchanged` and `adopt` are
  * skipped). It never renders: the caller owns the header lines and the paint. `withholdMcp` widens the one
- * withholding of spec 27 Ruling 4 — the example file — to every file tagged `mcp/*`, for a reader that is a model
- * (spec 35 §4.5). The disk is read at the row's path, never at one a caller typed.
+ * withholding of spec 27 Ruling 4 — the example file — to every file tagged `mcp/*` and, since spec 61 slice 3, `hook/*`, for a
+ * reader that is a model (spec 35 §4.5). The disk is read at the row's path, never at one a caller typed.
  */
 export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[], opts: { withholdMcp: boolean }): Promise<DiffRow[]> {
   const out: DiffRow[] = [];
@@ -149,6 +151,12 @@ export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[]
     if (s.state === "drift" || s.state === "collision") {
       if (opts.withholdMcp && mcpTagged(s)) {
         out.push(noted(MCP_CONTENT_HIDDEN));
+        continue;
+      }
+      // The new targets' hooks files (hook/*, spec 61 slice 3): what craftar writes there passed credentialIn, but a hand that edited
+      // one may have typed a token into a command, so a reader that is a model does not see it — as the MCP files.
+      if (opts.withholdMcp && s.ingredient === "hook/*") {
+        out.push(noted(HOOKS_CONTENT_HIDDEN));
         continue;
       }
       if (s.path === EXAMPLE_SETTINGS) {
@@ -222,7 +230,8 @@ export function carriedFile(p: Plan, file: string): CarriedFile | null {
 export function explainFile(ws: Workspace, p: Plan, file: string): ExplainedFile | null {
   const f = p.files.find((x) => x.path === file);
   if (!f) return null;
-  // AGENTS.md and Copilot's .github/copilot-instructions.md (rule/*) and the MCP files (mcp/*) are not one ingredient: nothing resolved has their ref.
+  // AGENTS.md and Copilot's .github/copilot-instructions.md (rule/*), the MCP files (mcp/*) and the hooks files of codex and
+  // antigravity (hook/*) are not one ingredient: nothing resolved has their ref.
   const ing = p.resolution.ingredients.find((i) => i.ref === f.ingredient);
   return {
     path: f.path,

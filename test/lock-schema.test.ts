@@ -55,8 +55,8 @@ describe("the lock schema (spec 13 §4.6, §5.2)", () => {
   });
 
   it("readLock refuses a schema it does not read, by name, without a zod dump", async () => {
-    const dir = await lockDir(JSON.stringify({ ...V2, schema: 6 }));
-    await expect(readLock(dir)).rejects.toThrow("craftar.lock declares schema 6, which this craftar does not read — upgrade craftar");
+    const dir = await lockDir(JSON.stringify({ ...V2, schema: 7 }));
+    await expect(readLock(dir)).rejects.toThrow("craftar.lock declares schema 7, which this craftar does not read — upgrade craftar");
     const str = await lockDir(JSON.stringify({ ...V2, schema: "2" }));
     await expect(readLock(str)).rejects.toThrow('craftar.lock declares schema (not a whole number), which this craftar does not read — upgrade craftar');
   });

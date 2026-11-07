@@ -177,7 +177,7 @@ describe("planInit — the Forge and the flags (spec 23 N3–N11)", () => {
   it("--ref with a directory Forge (N11), an unknown target (N7), an unknown profile (N5), a plan failure (N8)", async () => {
     const s = await setup();
     expect(await refused(s.run({ ref: "v1" }))).toBe("--ref goes with a remote Forge — a path Forge is read as its working tree");
-    expect(await refused(s.run({ targets: ["claude-code", "vscode"] }))).toBe('unknown target "vscode" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity)');
+    expect(await refused(s.run({ targets: ["claude-code", "vscode"] }))).toBe('unknown target "vscode" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, gemini)');
     expect(await refused(s.run({ profile: "nope" }))).toBe('profile "nope" not found in Forge (acme)');
     expect(await refused(s.run({ profile: "nope", addRecipes: ["extra"] }))).toBe('profile "nope" not found in Forge (acme)');
     const marked = await setup({
@@ -298,7 +298,7 @@ describe("planInit with a loaded Forge (spec 28 §5.2, §9.1)", () => {
       new Error("--forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)"),
     );
     // N7: unknown target
-    expect(() => checkInitFlags({ targets: ["nope"] })).toThrow(new Error('unknown target "nope" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity)'));
+    expect(() => checkInitFlags({ targets: ["nope"] })).toThrow(new Error('unknown target "nope" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, gemini)'));
     // N11: ref with path Forge
     expect(() => checkInitFlags({ forge: "../forge", ref: "main" })).toThrow(
       new Error("--ref goes with a remote Forge — a path Forge is read as its working tree"),

@@ -22,7 +22,7 @@ import type { EmitBase, Emitter, PlannedFile } from "../src/emitters/types.js";
 /**
  * Creates a Forge with one ingredient per type (two skills: dir and file layout), each with
  * `targets: "*"` and a unique output name, and every body referencing `.claude/rules/cite-me.md`.
- * @param schema The Forge schema version to use (1 for legacy targets, 16 for every native target)
+ * @param schema The Forge schema version to use (1 for legacy targets, 17 for every native target)
  */
 async function makeCapabilityForge(root: string, schema: number): Promise<void> {
   // Create the forge manifest with the specified schema
@@ -187,6 +187,11 @@ async function isAsHeld(
     return true;
   }
 
+  // A new target's hooks file (`hook/*`, spec 61 slice 3) is the registration reshaped, never the ingredient's own files
+  if (type === "hook" && f.ingredient === "hook/*") {
+    return false;
+  }
+
   // For AGENTS.md (shared rule/* file), it is not as held by construction (spec 16 §10.2)
   if (f.ingredient === "rule/*") {
     return false;
@@ -307,13 +312,13 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
   let legacyForgeRoot: string;
   let cursorForgeRoot: string;
 
-  // Set up the shared Forges once - schema 1 for legacy, schema 16 for every native target (slice 1 and slice 2)
+  // Set up the shared Forges once - schema 1 for legacy, schema 17 for every native target (slices 1 to 3)
   beforeAll(async () => {
     root = await tmpDir("craftar-capabilities-");
     legacyForgeRoot = path.join(root, "forge-legacy");
     cursorForgeRoot = path.join(root, "forge-cursor");
     await makeCapabilityForge(legacyForgeRoot, 1);
-    await makeCapabilityForge(cursorForgeRoot, 16);
+    await makeCapabilityForge(cursorForgeRoot, 17);
   });
 
   afterAll(async () => {
@@ -369,12 +374,17 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               continue;
             }
             // Shared files: AGENTS.md belongs to type=rule (agents-md); copilot-instructions.md for copilot
-            if (type === "rule" && f.ingredient === "rule/*" && (f.path === "AGENTS.md" || f.path === ".github/copilot-instructions.md")) {
+            if (type === "rule" && f.ingredient === "rule/*" && (f.path === "AGENTS.md" || f.path === ".github/copilot-instructions.md" || f.path === "GEMINI.md")) {
               cellFiles.push(f);
               continue;
             }
             // Shared files: MCP files belong to type=mcp
             if (type === "mcp" && f.ingredient === "mcp/*") {
+              cellFiles.push(f);
+              continue;
+            }
+            // Shared files: a hooks file of a new target (`hook/*`, spec 61 slice 3) belongs to type=hook
+            if (type === "hook" && f.ingredient === "hook/*") {
               cellFiles.push(f);
               continue;
             }
@@ -412,7 +422,7 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
             // Direction 1: every cell file matches at least one output pattern
             for (const f of cellFiles) {
               // For a shared file, any fixture ref's output name works
-              const outNamesToTry = f.ingredient === "rule/*" || f.ingredient === "mcp/*"
+              const outNamesToTry = f.ingredient === "rule/*" || f.ingredient === "mcp/*" || f.ingredient === "hook/*"
                 ? fixtureRefs.map((ref) => ref.split("/")[1])
                 : [fixtureRefs.find((ref) => f.ingredient === ref)?.split("/")[1] ?? f.ingredient.split("/")[1]];
 
@@ -430,7 +440,7 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
             for (const pattern of cap.output) {
               const matchedByFile = cellFiles.some((f) => {
                 // For a shared file, any fixture ref's output name works
-                const outNamesToTry = f.ingredient === "rule/*" || f.ingredient === "mcp/*"
+                const outNamesToTry = f.ingredient === "rule/*" || f.ingredient === "mcp/*" || f.ingredient === "hook/*"
                   ? fixtureRefs.map((ref) => ref.split("/")[1])
                   : [fixtureRefs.find((ref) => f.ingredient === ref)?.split("/")[1] ?? f.ingredient.split("/")[1]];
 
@@ -460,7 +470,7 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
             for (const f of cellFiles) {
               // Find the ingredients for this file: a shared MCP file holds every fixture server, each judged; a shared rule
               // file, any fixture ref of the type
-              const ingRefs = f.ingredient === "mcp/*" ? fixtureRefs : f.ingredient === "rule/*" ? [fixtureRefs[0]] : [f.ingredient];
+              const ingRefs = f.ingredient === "mcp/*" || f.ingredient === "hook/*" ? fixtureRefs : f.ingredient === "rule/*" ? [fixtureRefs[0]] : [f.ingredient];
               for (const ingRef of ingRefs) {
                 const ing = forge.ingredients.get(ingRef);
                 if (!ing) continue;
@@ -524,6 +534,7 @@ describe("capability notes are plain text (spec 16 §4.4)", () => {
             c.note === "skipped with a warning when aimed at this target" ||
             c.note?.startsWith("through agent-skills: ") ||
             c.note?.startsWith("through agents-md: ") ||
+            c.note?.startsWith("through claude-code: ") ||
             c.note?.startsWith("not written: ") ||
             c.note?.startsWith("not written yet: ");
           if (!isAllowed) bad.push(`${t} · ${ty} (unsupported note not in allow-list: ${c.note})`);
@@ -588,11 +599,12 @@ const UNSUPPORTED: Array<[Target, string, string]> = [
     (ty) => ["agents-md", ty, `agents-md: 1 ${ty} ingredient(s) have no AGENTS.md equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
   // cursor supports rule, agent, mcp; the rest are unsupported (per-type warnings like agents-md)
-  ...(["command", "skill", "script", "steering", "hook", "service"] as const).map(
+  // (cursor · hook and copilot · hook read "through claude-code": checked apart, below)
+  ...(["command", "skill", "script", "steering", "service"] as const).map(
     (ty) => ["cursor", ty, `cursor: 1 ${ty} ingredient(s) have no Cursor equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
   // copilot supports rule, agent, command, mcp; the rest are unsupported (per-type warnings)
-  ...(["skill", "script", "steering", "hook", "service"] as const).map(
+  ...(["skill", "script", "steering", "service"] as const).map(
     (ty) => ["copilot", ty, `copilot: 1 ${ty} ingredient(s) have no Copilot equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
   // agent-skills supports command, skill; the rest are unsupported (per-type warnings)
@@ -602,13 +614,30 @@ const UNSUPPORTED: Array<[Target, string, string]> = [
 ];
 
 describe("written() — the walk decides and warns from the matrix (spec 18 §9.3)", () => {
-  it("the 31 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
-    expect(UNSUPPORTED).toHaveLength(31);
+  it("the 29 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
+    expect(UNSUPPORTED).toHaveLength(29);
     for (const [target, type, text] of UNSUPPORTED) {
       expect(record(await resolutionOf([spec(type, "x")]), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
       const other = target === "claude-code" ? ["kiro"] : ["claude-code"];
       expect(record(await resolutionOf([spec(type, "x", { targets: other })]), target), `${target} · ${type} not aimed`).toEqual([]);
     }
+  });
+
+  it("cursor · hook and copilot · hook are \"through claude-code\" (spec 61 slice 3, H1): silent with claude-code among the targets", async () => {
+    // resolutionOf's profile names claude-code, so the hook reaches Cursor and Copilot through .claude/settings.json: nothing said
+    expect(record(await resolutionOf([spec("hook", "x")]), "cursor")).toEqual([]);
+    expect(record(await resolutionOf([spec("hook", "x")]), "copilot")).toEqual([]);
+    // a hook whose targets leave claude-code out reaches no file they read: warned
+    const s = await scenario(
+      { ingredients: [spec("hook", "x", { targets: ["cursor", "copilot"] })], recipes: [recipe("base", ["hook/x"])], profiles: [profile("acme", ["base"], ["claude-code", "cursor"])] },
+      { config: { profile: "acme" } },
+    );
+    walkCleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), "name: f\nschema: 16\n");
+    const w = await loadWorkspace(s.wsRoot);
+    expect(record(resolve(w.forge, w.config), "cursor")).toEqual([
+      "warn cursor: 1 hook ingredient(s) have no Cursor equivalent — skipped: hook/x",
+    ]);
   });
 
   it("a variant is named by its ref", async () => {

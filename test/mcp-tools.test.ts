@@ -85,7 +85,7 @@ describe("the tools answer with the commands' data (a path Forge)", () => {
     await fs.appendFile(path.join(s.wsRoot, "craftar.yaml"), "ref: v1\n");
     const got = data(await one("targets", await session(s.wsRoot)));
     expect(Object.keys(got)).toEqual(["ingredientTypes", "targets", "warnings"]);
-    expect(got.targets.map((t: any) => [t.name, t.inUse])).toEqual([["claude-code", true], ["kiro", false], ["agents-md", false], ["cursor", false], ["copilot", false], ["agent-skills", false], ["codex", false], ["antigravity", false]]);
+    expect(got.targets.map((t: any) => [t.name, t.inUse])).toEqual([["claude-code", true], ["kiro", false], ["agents-md", false], ["cursor", false], ["copilot", false], ["agent-skills", false], ["codex", false], ["antigravity", false], ["gemini", false]]);
     expect(got.warnings).toEqual([]);
   });
 
@@ -342,7 +342,7 @@ describe("a workspace that does not load", () => {
     const msg = `Forge not found at ${s.forgeRoot}`;
     for (const [name, args] of [["status"], ["diff"], ["explain", { path: `${R}/keep.md` }], ["recipes"], ["ingredients"]] as const) expect(failed(await one(name, m, args as any)), name).toBe(msg);
     const t = data(await one("targets", m));
-    expect(t.targets.map((x: any) => x.inUse)).toEqual([null, null, null, null, null, null, null, null]);
+    expect(t.targets.map((x: any) => x.inUse)).toEqual([null, null, null, null, null, null, null, null, null]);
     expect(t.warnings).toEqual([`targets in use not shown: ${msg}`]);
     expect(data(await one("doctor", m)).checks.find((c: any) => c.id === "config")).toMatchObject({ level: "error", message: msg });
     await fs.rename(`${s.forgeRoot}-away`, s.forgeRoot);
@@ -373,7 +373,7 @@ describe("a workspace that does not load", () => {
     for (const [name, args] of [["status"], ["diff"], ["explain", { path: `${R}/keep.md` }], ["recipes"], ["ingredients"], ["doctor"]] as const)
       expect(failed(await one(name, m, args as any)), name).toMatch(/^craftar\.yaml not found in /);
     const t = data(await one("targets", m));
-    expect(t.targets.map((x: any) => x.inUse)).toEqual([null, null, null, null, null, null, null, null]);
+    expect(t.targets.map((x: any) => x.inUse)).toEqual([null, null, null, null, null, null, null, null, null]);
     expect(t.warnings).toHaveLength(1);
     expect(t.warnings[0]).toMatch(/^targets in use not shown: craftar\.yaml not found in /);
     await fs.writeFile(file, text);
@@ -398,7 +398,7 @@ describe("the pin", () => {
       expect(JSON.stringify(a)).not.toMatch(/SENTINEL|globex|v9/);
     }
     const t = data(await one("targets", m));
-    expect(t.targets.map((x: any) => x.inUse)).toEqual([null, null, null, null, null, null, null, null]);
+    expect(t.targets.map((x: any) => x.inUse)).toEqual([null, null, null, null, null, null, null, null, null]);
     expect(t.warnings).toEqual([`targets in use not shown: ${PIN_CHANGED}`]);
   };
 

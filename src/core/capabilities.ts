@@ -195,7 +195,7 @@ export const CAPABILITIES = {
     },
     script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-    hook: { state: "unsupported", output: [], note: "not written yet: Cursor's hook events differ — planned for a later release" },
+    hook: { state: "unsupported", output: [], note: "through claude-code: Cursor runs the hooks .claude/settings.json holds (craftar settings apply writes them), so writing its own file would run each hook twice" },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
   copilot: {
@@ -222,7 +222,7 @@ export const CAPABILITIES = {
     },
     script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-    hook: { state: "unsupported", output: [], note: "not written yet: Copilot's hook events differ — planned for a later release" },
+    hook: { state: "unsupported", output: [], note: "through claude-code: the Copilot CLI and VS Code run the hooks .claude/settings.json holds (craftar settings apply writes them; VS Code behind chat.useClaudeHooks), so writing .github/hooks/ would run each hook twice; the cloud agent reads only .github/hooks/" },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
   "agent-skills": {
@@ -256,7 +256,11 @@ export const CAPABILITIES = {
     mcp: { state: "unsupported", output: [], note: "not written: Codex's MCP servers live in .codex/config.toml, which holds every other Codex setting — configure them there by hand" },
     script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-    hook: { state: "unsupported", output: [], note: "not written yet: Codex's hooks are reviewed by hand in a trusted project — planned for a later release" },
+    hook: {
+      state: "converted",
+      output: [".codex/hooks.json"],
+      note: "the registration in Claude Code's shape, events and matchers kept (Codex uses Claude Code's names); an event Codex lacks, or an entry with args, skipped with a warning; shell dropped with a warning; the hook's files stay claude-code's, and Codex reviews each hook in /hooks before it runs",
+    },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
   antigravity: {
@@ -279,7 +283,34 @@ export const CAPABILITIES = {
     },
     script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-    hook: { state: "unsupported", output: [], note: "not written yet: Antigravity's hook events differ — planned for a later release" },
+    hook: {
+      state: "converted",
+      output: [".agents/hooks.json"],
+      note: "one named hook per ingredient; PreToolUse, PostToolUse, SessionStart and Stop kept, any other event skipped with a warning; a matcher translated to Antigravity's tool names (the pairing inferred from its tools' descriptions) when it is a list of Claude Code tool names, else skipped with a warning; an entry with args skipped and shell dropped, each with a warning; the hook's files stay claude-code's; Antigravity's trust of a workspace hook is not documented",
+    },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
+  gemini: {
+    rule: {
+      state: "converted",
+      output: ["GEMINI.md"],
+      note: "with agents-md among the targets GEMINI.md imports AGENTS.md (@AGENTS.md) and every rule with the default targets is left to it; otherwise, and for a rule listed for gemini, the always-on rules are embedded and a scoped rule is listed at the file claude-code or kiro writes for it, or embedded with its scope (Gemini has no scoping)",
+    },
+    agent: {
+      state: "converted",
+      output: [".gemini/agents/<name>.md"],
+      note: "name, description and model kept, model written as inherit unless it names a Gemini model; tools are not written (Gemini's tool names differ), dropped with a warning",
+    },
+    command: {
+      state: "converted",
+      output: [".gemini/commands/<name>.toml"],
+      note: "written as TOML with description and prompt, $ARGUMENTS written as {{args}}; argument-hint and allowed-tools have no field and are dropped with a warning; with agent-skills among the targets, a command with the default targets is left to .agents/skills/",
+    },
+    skill: { state: "unsupported", output: [], note: "through agent-skills: Gemini reads .agents/skills/, written by the agent-skills target" },
+    mcp: { state: "unsupported", output: [], note: "not written: Gemini's MCP servers live in .gemini/settings.json, which holds every other Gemini setting — configure them there by hand" },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "not written: Gemini's hooks live in .gemini/settings.json, which holds every other Gemini setting — configure them there by hand" },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
@@ -335,9 +366,10 @@ const writtenIs: [
   Equal<Written<"cursor">, "rule" | "agent" | "mcp">,
   Equal<Written<"copilot">, "rule" | "agent" | "command" | "mcp">,
   Equal<Written<"agent-skills">, "command" | "skill">,
-  Equal<Written<"codex">, "agent">,
-  Equal<Written<"antigravity">, "rule" | "agent" | "mcp">,
-] = [true, true, true, true, true, true, true, true];
+  Equal<Written<"codex">, "agent" | "hook">,
+  Equal<Written<"antigravity">, "rule" | "agent" | "mcp" | "hook">,
+  Equal<Written<"gemini">, "rule" | "agent" | "command">,
+] = [true, true, true, true, true, true, true, true, true];
 void writtenIs;
 
 /**
@@ -349,11 +381,12 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; 
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
-  cursor: { label: "Cursor", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
-  copilot: { label: "Copilot", per: "type", carriers: { skill: "agent-skills" } },
+  cursor: { label: "Cursor", per: "type", carriers: { command: "agent-skills", skill: "agent-skills", hook: "claude-code" } },
+  copilot: { label: "Copilot", per: "type", carriers: { skill: "agent-skills", hook: "claude-code" } },
   "agent-skills": { label: "Agent Skills", per: "type" },
   codex: { label: "Codex", per: "type", carriers: { rule: "agents-md", command: "agent-skills", skill: "agent-skills" } },
   antigravity: { label: "Antigravity", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
+  gemini: { label: "Gemini", per: "type", carriers: { skill: "agent-skills" } },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {

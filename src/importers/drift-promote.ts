@@ -188,6 +188,9 @@ const D4_OTHER = (p: string, state: string) => `${p} is not drifted (${state}) �
 const D4_ORPHAN = (p: string) => `${p} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${p}\` removes it`;
 const D5_KIRO = (p: string, hint: string) => `${p} is a kiro file — promote reads only what the claude-code target wrote${hint}`;
 const D5_AGENTSMD = (p: string) => `${p} holds several rules in one file — promote reads only what the claude-code target wrote`;
+/** D5 for the hooks files of codex and antigravity (spec 61 slice 3): one file holds every hook ingredient's registration. */
+const D5_HOOKS = (p: string) =>
+  `${p} holds every hook ingredient's registration in one file — promote reads only what the claude-code target wrote; edit the hook ingredient's registration in the Forge`;
 /** D5 for new targets (spec 61): a file of a non-legacy target. */
 const D5_TARGET = (p: string, target: string, hint: string) =>
   `${p} is ${/^[aeiou]/.test(target) ? "an" : "a"} ${target} file — promote reads only what the claude-code target wrote${hint}`;
@@ -690,6 +693,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       throw new Error(D6(normalized));
     } else if (reason === "several rules") {
       throw new Error(D5_AGENTSMD(normalized));
+    } else if (fileStatus.ingredient === "hook/*") {
+      // A new target's hooks file (spec 61 slice 3) holds every hook ingredient's registration in one file
+      throw new Error(D5_HOOKS(normalized));
     } else if (fileStatus.target && !isLegacyOwner(fileStatus.target)) {
       // A new target's file (spec 61): decided by the status's target, not by the reason's text
       const target = fileStatus.target;

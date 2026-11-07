@@ -11,6 +11,8 @@ import {
   type Target,
   FORGE_SCHEMA_NATIVE_TARGETS,
   FORGE_SCHEMA_SLICE_2_TARGETS,
+  FORGE_SCHEMA_GEMINI,
+  SLICE_2_TARGETS,
 } from "../schema/index.js";
 
 /**
@@ -27,6 +29,7 @@ export const TARGET_SINCE: Record<Target, number> = {
   "agent-skills": FORGE_SCHEMA_NATIVE_TARGETS,
   codex: FORGE_SCHEMA_SLICE_2_TARGETS,
   antigravity: FORGE_SCHEMA_SLICE_2_TARGETS,
+  gemini: FORGE_SCHEMA_GEMINI,
 };
 
 /** Whether a Forge at `schema` may name `target`. The ONE comparison with the targets' gates. */
@@ -48,12 +51,13 @@ export function nativeTargetNearMiss(file: string | null, key: string, target: T
 }
 
 /**
- * The lock schema an owner needs (spec 61 §7, slice 2's G1): 2 for a legacy target, 3 for `services`, 4 for a slice-1 target,
- * 5 for any later one. `apply()` writes the highest its targets and entries need.
+ * The lock schema an owner needs (spec 61 §7, slice 2's G1, slice 3's G2): 2 for a legacy target, 3 for `services`, 4 for a
+ * slice-1 target, 5 for a slice-2 one, 6 for any later one. `apply()` writes the highest its targets and entries need.
  */
-export function lockSchemaFor(owner: Owner): 2 | 3 | 4 | 5 {
+export function lockSchemaFor(owner: Owner): 2 | 3 | 4 | 5 | 6 {
   if (owner === "services") return 3;
   if ((LEGACY_TARGETS as readonly string[]).includes(owner)) return 2;
   if ((SLICE_1_TARGETS as readonly string[]).includes(owner)) return 4;
-  return 5;
+  if ((SLICE_2_TARGETS as readonly string[]).includes(owner)) return 5;
+  return 6;
 }

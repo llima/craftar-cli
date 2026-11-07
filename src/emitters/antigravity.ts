@@ -2,6 +2,10 @@ import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { mcpServers, MCP_FILE, outName, ownRuleRefs, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
+import { antigravityHooks } from "./hooks.js";
+
+/** Antigravity's workspace hooks file (spec 61 slice 3, H1): dedicated to hooks, one named hook per ingredient. */
+export const ANTIGRAVITY_HOOKS = ".agents/hooks.json";
 
 /** Antigravity's rule size limit, per file (spec 61 §3.5): over it, the tool's behaviour is not measured, so the plan warns. */
 const RULE_MAX_BYTES = 24000;
@@ -13,7 +17,8 @@ const MODELS = new Set(["inherit", "flash", "pro"]);
  * Google Antigravity target (spec 61 §3.5, §5.2, slice 2): `.agents/rules/<name>.md`, `.agents/agents/<name>.md`,
  * `.agents/mcp_config.json`. Every rule carries its frontmatter — the tool drops a rule without one, or with a bad `trigger`, and
  * says nothing — and with `agents-md` among the targets an always-on rule with the default targets is left to `AGENTS.md`, which
- * Antigravity reads (D3). Commands and skills reach it through the agent-skills target; the matrix warns for them here. Text keeps
+ * Antigravity reads (D3). Since slice 3 (H1) a hook's registration is written to `.agents/hooks.json`, translated (`antigravityHooks`). Commands and skills
+ * reach it through the agent-skills target; the matrix warns for them here. Text keeps
  * the line endings of the file it replaces (LF when new) and never carries a BOM.
  */
 export const antigravity: Emitter<"antigravity"> = {
@@ -22,6 +27,7 @@ export const antigravity: Emitter<"antigravity"> = {
     const out: PlannedFile[] = [];
     const t = "antigravity";
     const mcp: ResolvedIngredient[] = [];
+    const hooks: ResolvedIngredient[] = [];
     const refs = ownRuleRefs(ctx, t);
     for (const ing of ctx.aimed) {
       const m = ctx.meta(ing);
@@ -51,6 +57,9 @@ export const antigravity: Emitter<"antigravity"> = {
         case "mcp":
           mcp.push(ing);
           break;
+        case "hook":
+          hooks.push(ing); // collected into .agents/hooks.json below
+          break;
         default: {
           const never: never = m;
           throw new Error(`internal: ${t} has no case for ${(never as Ingredient).type}`);
@@ -64,6 +73,8 @@ export const antigravity: Emitter<"antigravity"> = {
       const servers = Object.fromEntries(Object.entries(mcpServers(ctx, t, MCP_FILE.antigravity, mcp)).map(([k, v]) => [k, serverUrl(v)]));
       out.push(await textFile(ctx, MCP_FILE.antigravity, JSON.stringify({ mcpServers: servers }, null, 2) + "\n", t, "mcp/*", { keepBom: false }));
     }
+    const hookDoc = hooks.length ? antigravityHooks(ctx, hooks) : null;
+    if (hookDoc) out.push(await textFile(ctx, ANTIGRAVITY_HOOKS, JSON.stringify(hookDoc, null, 2) + "\n", t, "hook/*", { keepBom: false }));
     return out;
   },
 };

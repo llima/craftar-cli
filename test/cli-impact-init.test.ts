@@ -1938,7 +1938,7 @@ describe("cli — craftar init off a terminal (spec 28 §4.5)", () => {
     const r = s.run(["init", "--workspace", ws, "--forge", s.forge, "--targets", "nope"]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe('error: unknown target "nope" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity)\n');
+    expect(r.stderr).toBe('error: unknown target "nope" (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, gemini)\n');
     expect(await exists(ws)).toBe(false);
   });
 

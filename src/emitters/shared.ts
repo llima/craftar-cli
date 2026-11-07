@@ -16,10 +16,11 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
 
 /**
  * The MCP file each target writes (spec 42 §5.2: shared by the emitters and doctor's mcp-launcher).
- * agents-md, agent-skills and codex write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` is shared, D5),
+ * agents-md, agent-skills, codex and gemini write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` and
+ * gemini's `.gemini/settings.json` are shared, D5),
  * so they have no entries.
  */
-export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex" | "gemini">, string>;
 
 /** What effectiveTargets reads of a resolution: agents-md.primary and the workspace's targets. */
 export interface TargetsView {
@@ -35,7 +36,9 @@ const CARRIED: ReadonlyArray<{ carrier: Target; writtenTo: string; skippers: rea
   // §6.1: an always-on rule with the default targets is left to AGENTS.md, which Cursor and Copilot read.
   { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["cursor", "copilot", "antigravity"], concerns: (m) => m.type === "rule" && m.inclusion === "always" && m.targets === "*" },
   // §9: a command with the default targets is left to .agents/skills/, which Copilot reads; a command listed [copilot] keeps its prompt file.
-  { carrier: "agent-skills", writtenTo: ".agents/skills/", skippers: ["copilot"], concerns: (m) => m.type === "command" && m.targets === "*" },
+  { carrier: "agent-skills", writtenTo: ".agents/skills/", skippers: ["copilot", "gemini"], concerns: (m) => m.type === "command" && m.targets === "*" },
+  // Slice 3: GEMINI.md imports AGENTS.md (`@AGENTS.md`), so every rule with the default targets — any inclusion — is left to it.
+  { carrier: "agents-md", writtenTo: "AGENTS.md", skippers: ["gemini"], concerns: (m) => m.type === "rule" && m.targets === "*" },
 ];
 
 /**
@@ -47,6 +50,8 @@ export function carriedPath(target: string, meta: Ingredient, ref: string): { pa
   if (target === "antigravity" && meta.type === "rule") return { path: `.agents/rules/${outName(meta)}.md`, ingredient: ref };
   if (target === "copilot" && meta.type === "rule") return { path: ".github/copilot-instructions.md", ingredient: "rule/*" };
   if (target === "copilot" && meta.type === "command") return { path: `.github/prompts/${outName(meta)}.prompt.md`, ingredient: ref };
+  if (target === "gemini" && meta.type === "command") return { path: `.gemini/commands/${outName(meta)}.toml`, ingredient: ref };
+  // A gemini rule left to AGENTS.md has no file of its own: GEMINI.md, which imports AGENTS.md, is written either way.
   return null;
 }
 
@@ -149,14 +154,25 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: T
   return { rulesByName, steeringsByName, ruleTargets };
 }
 
+/** Gemini's rules file (spec 61 slice 3, §3.2): the workspace's `GEMINI.md`, which holds the rules aimed at gemini. */
+export const GEMINI_MD = "GEMINI.md";
+
+/**
+ * Where a rule aimed at gemini lives for a reference (spec 61 slice 3): `GEMINI.md`, which embeds it, unless `GEMINI.md` only lists it
+ * — a scoped rule `kiro` writes (one `claude-code` writes is K2 before this is asked) — then the steering file it lists.
+ */
+function geminiPlace(meta: { name: string; as?: string; inclusion?: string }, targets: readonly string[], ruleTargets: "*" | string[]): string {
+  return meta.inclusion !== "always" && ruleWriter(targets, ruleTargets) === "kiro" ? ruleFile("kiro", meta) : GEMINI_MD;
+}
+
 /** The new targets' own modes (spec 61 §10): K1 is the file the citing target itself writes (codex writes none), then claude-code's, then AGENTS.md. */
-export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity";
+export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity" | "gemini";
 /** Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target's own mode (spec 61 §10). */
 export type RefMode = "agents-md" | "kiro" | OwnMode;
 
 /** Whether a reference mode is a new target's own mode. */
 export function isOwnMode(mode: RefMode): mode is OwnMode {
-  return mode === "cursor" || mode === "copilot" || mode === "codex" || mode === "antigravity";
+  return mode === "cursor" || mode === "copilot" || mode === "codex" || mode === "antigravity" || mode === "gemini";
 }
 
 /**
@@ -164,7 +180,8 @@ export function isOwnMode(mode: RefMode): mode is OwnMode {
  * an always-on or a scoped one (it skips a manual or an auto rule), codex none (it reads AGENTS.md only).
  */
 function ownWrites(mode: OwnMode, meta: Ingredient): boolean {
-  if (meta.type !== "rule" || mode === "codex") return false;
+  // Codex reads AGENTS.md only; GEMINI.md holds Gemini's rules but names no rule's own file, so neither writes one to point at.
+  if (meta.type !== "rule" || mode === "codex" || mode === "gemini") return false;
   return mode === "cursor" || mode === "antigravity" || meta.inclusion === "always" || meta.inclusion === "fileMatch";
 }
 
@@ -192,7 +209,12 @@ export function ruleRefState(
     // Spec 61 §10: K1 is the file the citing target writes; then claude-code's, then AGENTS.md, as for kiro (no steering here)
     if (rule && ruleTargets && targets.includes(mode) && appliesTo(ruleTargets, mode) && ownWrites(mode, rule.meta)) return "K1";
     if (rule && ruleTargets && hasCc && appliesTo(ruleTargets, "claude-code")) return "K2";
+    // A scoped rule kiro writes is a pointer to its steering file in AGENTS.md and in GEMINI.md alike, so gemini names that file before
+    // AGENTS.md (geminiPlace gives it). The same gap in codex and copilot predates spec 61 slice 3 and is recorded as tech debt.
+    if (mode === "gemini" && rule && ruleTargets && rule.meta.type === "rule" && rule.meta.inclusion !== "always" && ruleWriter(targets, ruleTargets) === "kiro") return "K1";
     if (rule && ruleTargets && hasMd && appliesTo(ruleTargets, "agents-md")) return "K3";
+    // Gemini names no rule file of its own, but every rule aimed at it is in GEMINI.md, embedded or listed: K1 names that place (geminiPlace)
+    if (mode === "gemini" && rule && ruleTargets && targets.includes("gemini") && appliesTo(ruleTargets, "gemini")) return "K1";
     if (rule) return "D";
     return "unknown";
   }
@@ -249,7 +271,13 @@ export function ruleReference(
   const rule = lookup.rulesByName.get(name);
   if (isOwnMode(mode)) {
     switch (state) {
-      case "K1": return { state, text: ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) };
+      case "K1": {
+        if (mode === "gemini") {
+          const place = geminiPlace(rule!.meta as { name: string; inclusion?: string }, targets, lookup.ruleTargets.get(name)!);
+          return { state, text: place === GEMINI_MD ? `${GEMINI_MD} (rule: ${name})` : place };
+        }
+        return { state, text: ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) };
+      }
       case "K2": return { state, text: `.claude/rules/${name}.md` };  // unchanged
       case "K3": return { state, text: `AGENTS.md (rule: ${name})` };
       case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
@@ -485,9 +513,12 @@ export function resolveRuleRefs(
           break;
         case "B": {
           // Computed here only: B means the rule exists and the citing target writes it (K1 in an own mode), so `rule` is set and
-          // the mode is one that writes rules — a link to a rule the workspace lacks, or in codex, never reaches this line.
-          const bFile = own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
-          replacement = `[${resolvedText}](${bFile}${frag ?? ""})`;
+          // the mode is one that writes rules — a link to a rule the workspace lacks, or in codex, never reaches this line; in gemini
+          // it is the rule's place, GEMINI.md or the steering file GEMINI.md lists (geminiPlace).
+          const gPlace = mode === "gemini" ? geminiPlace(rule!.meta as { name: string; inclusion?: string }, targets, lookup.ruleTargets.get(name)!) : null;
+          const bFile = gPlace !== null ? gPlace : own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
+          // GEMINI.md, like AGENTS.md (C), has no heading per rule to land on: its fragment is dropped
+          replacement = `[${resolvedText}](${bFile}${gPlace === GEMINI_MD ? "" : (frag ?? "")})`;
           break;
         }
         case "C":
@@ -642,7 +673,7 @@ export function ruleFile(target: "claude-code" | "kiro" | OwnMode, m: { name: st
   if (target === "cursor") return `.cursor/rules/${outName(m)}.mdc`;
   if (target === "antigravity") return `.agents/rules/${outName(m)}.md`;
   // Codex writes no rule file (it reads AGENTS.md), so no state names one for it (ownWrites).
-  if (target === "codex") throw new Error("internal: codex writes no rule file");
+  if (target === "codex" || target === "gemini") throw new Error(`internal: ${target} writes no rule file of its own`);
   // Copilot joins every always-on rule into one file (spec 61 §5.2)
   if (target === "copilot") return m.inclusion === "always" ? ".github/copilot-instructions.md" : `.github/instructions/${outName(m)}.instructions.md`;
   return target === "claude-code" ? `.claude/rules/${outName(m)}.md` : `.kiro/steering/${outName(m)}.md`;
@@ -1040,7 +1071,8 @@ export function expandRulesIndex(
     if (state === "D" || state === "unknown") continue;
 
     // Build the path string: wrap in backticks for A, B, K1, K2 (file paths); as-is for C, K3 (AGENTS.md refs)
-    const isPathState = state === "A" || state === "B" || state === "K1" || state === "K2";
+    // Gemini's K1 in GEMINI.md is worded as AGENTS.md's place is (C, K3), so not a path; one GEMINI.md only lists is the steering file
+    const isPathState = state === "A" || state === "B" || (state === "K1" && !(mode === "gemini" && ref.text.startsWith(`${GEMINI_MD} (rule:`))) || state === "K2";
     const path = isPathState ? `\`${ref.text}\`` : ref.text;
 
     // Check description validity

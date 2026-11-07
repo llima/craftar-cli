@@ -26,6 +26,7 @@ import {
   type LockEntryV3,
   type LockEntryV4,
   type LockEntryV5,
+  type LockEntryV6,
 } from "../schema/index.js";
 
 /** Whether a path is listed in the binary array. */
@@ -384,7 +385,7 @@ export interface Recorded {
  * It reads the lock and the workspace only — no Forge, no plan, no Docker — and writes nothing.
  */
 export async function recordedServices(root: string, lock: Lock | null): Promise<Recorded> {
-  const all: readonly (LockEntryV3 | LockEntryV4 | LockEntryV5)[] = lock?.files ?? [];
+  const all: readonly (LockEntryV3 | LockEntryV4 | LockEntryV5 | LockEntryV6)[] = lock?.files ?? [];
   const entries = all.filter((e) => e.target === "services");
   const out: Recorded = { entries: entries.length, stack: entries.some((e) => e.path === STACK), services: [], pending: [], warnings: [] };
   if (entries.length === 0) return out;
