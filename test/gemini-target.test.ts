@@ -91,6 +91,26 @@ describe("GEMINI.md", () => {
     expect(text(p, "GEMINI.md")).toContain("See AGENTS.md (rule: style).");
   });
 
+  it("review: in a gemini-only workspace a reference to a rule GEMINI.md holds names its place there, as a token and as a link", async () => {
+    const p = await planOf(await ws(17, ["gemini"], [
+      rule("only", {}, "See .claude/rules/style.md and [the style](.claude/rules/style.md).\n"),
+      rule("style"),
+    ]));
+    const t = text(p, "GEMINI.md");
+    expect(t).toContain("See GEMINI.md (rule: style) and [the style](GEMINI.md).");
+    expect(t).not.toContain("rule not in this workspace");
+    expect(p.warnings.filter((w) => w.startsWith("gemini:"))).toEqual([]);
+  });
+
+  it("review: the rules index in GEMINI.md names a rule's place there; a placeholder not alone on its line is the misplaced warning", async () => {
+    const indexed = await planOf(await ws(17, ["gemini"], [rule("idx", {}, "Rules:\n{{craftar.rules.index}}\n"), rule("style", { description: "Style" })]));
+    expect(text(indexed, "GEMINI.md")).toContain("GEMINI.md (rule: style)");
+    expect(text(indexed, "GEMINI.md")).not.toContain("`GEMINI.md (rule: style)`");
+    const misplaced = await planOf(await ws(17, ["gemini"], [rule("idx", {}, "Rules: {{craftar.rules.index}} here.\n")]));
+    expect(misplaced.warnings.some((w) => w.startsWith("{{craftar.rules.index}} must stand alone on its line — left as written in GEMINI.md:"))).toBe(true);
+    expect(misplaced.warnings.some((w) => w.includes("expanded in rule and steering bodies only"))).toBe(false);
+  });
+
   it("keeps the line endings of the file it replaces and never writes a BOM", { timeout: atLeastWin32(30_000) }, async () => {
     const s = await ws(17, ["gemini"], [rule("style")]);
     await syncOf(s);

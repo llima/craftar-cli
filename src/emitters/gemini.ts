@@ -2,11 +2,10 @@ import type { Ingredient } from "../schema/index.js";
 import type { ResolvedIngredient } from "../core/resolve.js";
 import { tomlDocument } from "../core/toml.js";
 import { ruleMarker } from "./agents-md.js";
-import { appliesTo, effectiveTargets, outName, ownRuleRefs, ruleFile, ruleWriter, textFile } from "./shared.js";
+import { appliesTo, effectiveTargets, GEMINI_MD, outName, ownRuleRefs, ruleFile, ruleWriter, textFile } from "./shared.js";
 import type { Emitter, PlannedFile } from "./types.js";
 
-/** Gemini's rules file (spec 61 slice 3, §3.2): the workspace's `GEMINI.md`, read by Gemini CLI; it takes `@file` imports. */
-export const GEMINI_MD = "GEMINI.md";
+export { GEMINI_MD };
 
 /**
  * Gemini CLI target (spec 61 §3.2, slice 3; its gate G2, Forge schema 17 and lock schema 6): `GEMINI.md`,

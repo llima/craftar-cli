@@ -994,10 +994,11 @@ export async function plan(ws: Workspace): Promise<Plan> {
     // Scan the planned files for misplaced placeholders (not alone on line).
     // This detects lines in the PLANNED content, not the ingredient body.
     // Applies to rule bodies (.claude/rules/<name>.md, .kiro/steering/<name>.md, and since spec 61 .cursor/rules/<name>.mdc,
-    // .github/instructions/<name>.instructions.md, .github/copilot-instructions.md and .agents/rules/<name>.md) and AGENTS.md.
+    // .github/instructions/<name>.instructions.md, .github/copilot-instructions.md, .agents/rules/<name>.md and GEMINI.md) and AGENTS.md.
     const misplacedLocations: string[] = [];
     const isRuleOrSteeringOrAgentsMd = (p: string) =>
       p === "AGENTS.md" ||
+      p === "GEMINI.md" ||
       p === ".github/copilot-instructions.md" ||
       /^\.claude\/rules\/[^/]+\.md$/.test(p) ||
       /^\.kiro\/steering\/[^/]+\.md$/.test(p) ||

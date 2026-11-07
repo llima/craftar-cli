@@ -154,6 +154,9 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: T
   return { rulesByName, steeringsByName, ruleTargets };
 }
 
+/** Gemini's rules file (spec 61 slice 3, §3.2): the workspace's `GEMINI.md`, which holds the rules aimed at gemini. */
+export const GEMINI_MD = "GEMINI.md";
+
 /** The new targets' own modes (spec 61 §10): K1 is the file the citing target itself writes (codex writes none), then claude-code's, then AGENTS.md. */
 export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity" | "gemini";
 /** Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target's own mode (spec 61 §10). */
@@ -199,6 +202,8 @@ export function ruleRefState(
     if (rule && ruleTargets && targets.includes(mode) && appliesTo(ruleTargets, mode) && ownWrites(mode, rule.meta)) return "K1";
     if (rule && ruleTargets && hasCc && appliesTo(ruleTargets, "claude-code")) return "K2";
     if (rule && ruleTargets && hasMd && appliesTo(ruleTargets, "agents-md")) return "K3";
+    // Gemini names no rule file of its own, but every rule aimed at it is in GEMINI.md (embedded, or listed there): K1 names that place
+    if (mode === "gemini" && rule && ruleTargets && targets.includes("gemini") && appliesTo(ruleTargets, "gemini")) return "K1";
     if (rule) return "D";
     return "unknown";
   }
@@ -255,7 +260,7 @@ export function ruleReference(
   const rule = lookup.rulesByName.get(name);
   if (isOwnMode(mode)) {
     switch (state) {
-      case "K1": return { state, text: ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) };
+      case "K1": return { state, text: mode === "gemini" ? `${GEMINI_MD} (rule: ${name})` : ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) };
       case "K2": return { state, text: `.claude/rules/${name}.md` };  // unchanged
       case "K3": return { state, text: `AGENTS.md (rule: ${name})` };
       case "D": return { state, text: `${name} (rule not in this workspace)`, reworded: { ref: `.claude/rules/${name}.md`, kind: `${rule!.ref} reaches no target here` } };
@@ -491,8 +496,9 @@ export function resolveRuleRefs(
           break;
         case "B": {
           // Computed here only: B means the rule exists and the citing target writes it (K1 in an own mode), so `rule` is set and
-          // the mode is one that writes rules — a link to a rule the workspace lacks, or in codex, never reaches this line.
-          const bFile = own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
+          // the mode is one that writes rules — a link to a rule the workspace lacks, or in codex, never reaches this line; in gemini
+          // it is the rule's place in GEMINI.md.
+          const bFile = mode === "gemini" ? GEMINI_MD : own ? ruleFile(mode, rule!.meta as { name: string; as?: string; inclusion?: string }) : ruleFile("kiro", { name });
           replacement = `[${resolvedText}](${bFile}${frag ?? ""})`;
           break;
         }
@@ -1046,7 +1052,8 @@ export function expandRulesIndex(
     if (state === "D" || state === "unknown") continue;
 
     // Build the path string: wrap in backticks for A, B, K1, K2 (file paths); as-is for C, K3 (AGENTS.md refs)
-    const isPathState = state === "A" || state === "B" || state === "K1" || state === "K2";
+    // Gemini's K1 is the rule's place in GEMINI.md, worded as AGENTS.md's is (C, K3), so not a path
+    const isPathState = state === "A" || state === "B" || (state === "K1" && mode !== "gemini") || state === "K2";
     const path = isPathState ? `\`${ref.text}\`` : ref.text;
 
     // Check description validity
