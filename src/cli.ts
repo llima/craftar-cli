@@ -45,7 +45,7 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, GEMINI_ORPHAN, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, GEMINI_ORPHAN_WHY, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, overriddenRoot, withLoadWarnings, type CatalogueContext, type ContextSource, type IngredientEntry } from "./core/catalogue.js";
@@ -982,7 +982,7 @@ async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: bo
     // A removal: the file exists on disk but the Forge no longer produces it
     console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
     const orphanReason = s.target === REMOVED_TARGET
-      ? `${GEMINI_ORPHAN.replace(/^orphan: /, "")} — sync removes it`
+      ? `${GEMINI_ORPHAN_WHY} — sync removes it`
       : opts.isPrimary
       ? "written to AGENTS.md only — sync removes it"
       : opts.carriedTo !== undefined

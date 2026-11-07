@@ -1299,8 +1299,10 @@ export function claudeMdBlockedMessage(file: string): string {
   return `agents-md.primary: ${file} keeps Claude Code from reading AGENTS.md — add a line @AGENTS.md to CLAUDE.md, or set Project instructions to claude-md-and-agents-md`;
 }
 
-/** The orphan reason of a file a 1.3.x lock records for `gemini`, which 1.4.0 removed: one spelling for `sync` and the `sync` tool. */
-export const GEMINI_ORPHAN = "orphan: the gemini target was removed in craftar 1.4.0";
+/** Why a file a 1.3.x lock records for `gemini` is an orphan (1.4.0 removed the target): the one wording, read by `diff`'s header too. */
+export const GEMINI_ORPHAN_WHY = "the gemini target was removed in craftar 1.4.0";
+/** The orphan reason of such a file: one spelling for `sync` and the `sync` tool. */
+export const GEMINI_ORPHAN = `orphan: ${GEMINI_ORPHAN_WHY}`;
 
 /**
  * Why `apply()` removed `path`: the orphan wording of `craftar sync` and of the `sync` tool of `craftar mcp`, one copy
