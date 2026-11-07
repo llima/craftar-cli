@@ -188,9 +188,10 @@ const D4_OTHER = (p: string, state: string) => `${p} is not drifted (${state}) �
 const D4_ORPHAN = (p: string) => `${p} is no longer produced by the Forge — nothing to promote into; \`craftar drift discard ${p}\` removes it`;
 const D5_KIRO = (p: string, hint: string) => `${p} is a kiro file — promote reads only what the claude-code target wrote${hint}`;
 const D5_AGENTSMD = (p: string) => `${p} holds several rules in one file — promote reads only what the claude-code target wrote`;
-/** D5 for new targets (spec 61): a file of a non-legacy target. */
+/** D5 for the hooks files of codex and antigravity (spec 61 slice 3): one file holds every hook ingredient's registration. */
 const D5_HOOKS = (p: string) =>
   `${p} holds every hook ingredient's registration in one file — promote reads only what the claude-code target wrote; edit the hook ingredient's registration in the Forge`;
+/** D5 for new targets (spec 61): a file of a non-legacy target. */
 const D5_TARGET = (p: string, target: string, hint: string) =>
   `${p} is ${/^[aeiou]/.test(target) ? "an" : "a"} ${target} file — promote reads only what the claude-code target wrote${hint}`;
 const D5_SERVICE = (p: string) => `${p} is a service file — promote reads only what the claude-code target wrote; change the service ingredient in the Forge`;
