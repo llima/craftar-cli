@@ -1,6 +1,6 @@
 {
   "planned": {
-    ".claude/agents/helper.md": "---\nname: helper\ntools: \n---\nHelp the user.\n",
+    ".claude/agents/helper.md": "---\nname: helper\n---\nHelp the user.\n",
     ".claude/rules/api.md": "# API\nEvery endpoint is RESTful.\n",
     ".claude/rules/readme.md": "# Rules\n",
     ".claude/rules/style.md": "# Style\nUse consistent formatting.\n",
@@ -145,7 +145,7 @@
     "files": [
       {
         "path": ".claude/agents/helper.md",
-        "hash": "sha256:905ee898bfdacecc14113983e60ee5f086dddd60f2e42df1e8f71a4f79ec2145",
+        "hash": "sha256:27ed2f9f7893134c2073d974ea43290425059ed1b39d36de915eec3736673f8b",
         "target": "claude-code",
         "ingredient": "agent/helper"
       },
@@ -247,7 +247,7 @@
         "ingredient": "agent/helper",
         "lock": {
           "path": ".claude/agents/helper.md",
-          "hash": "sha256:905ee898bfdacecc14113983e60ee5f086dddd60f2e42df1e8f71a4f79ec2145",
+          "hash": "sha256:27ed2f9f7893134c2073d974ea43290425059ed1b39d36de915eec3736673f8b",
           "target": "claude-code",
           "ingredient": "agent/helper"
         }

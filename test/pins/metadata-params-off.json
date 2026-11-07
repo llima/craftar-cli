@@ -1,6 +1,6 @@
 {
   "planned": {
-    ".claude/agents/helper.md": "---\nname: helper\ndescription: Helps {{org}} engineers\ntools: \n---\nHelp the user.\n",
+    ".claude/agents/helper.md": "---\nname: helper\ndescription: Helps {{org}} engineers\n---\nHelp the user.\n",
     ".claude/agents/raw.md": "---\nname: raw\ndescription: Reviews {{org}} changes\n---\nReview the change.\n",
     ".claude/commands/ship.md": "---\ndescription: Ship an {{org}} release\nargument-hint: <{{org}}-version>\n---\nShip it.\n",
     ".claude/rules/paths.md": "---\npaths: {{glob}}\n---\n# Paths\nKeep acme code tidy.\n",
@@ -124,7 +124,7 @@
     "files": [
       {
         "path": ".claude/agents/helper.md",
-        "hash": "sha256:b39cf0c05bf5cd1c6aa04d67f7d76d4d95196369b3d278299d10e5e0744a3122",
+        "hash": "sha256:16035e56f837f23d86eb4b17a21138d62217043886ec085ba5089759c82cac73",
         "target": "claude-code",
         "ingredient": "agent/helper"
       },
@@ -208,7 +208,7 @@
         "ingredient": "agent/helper",
         "lock": {
           "path": ".claude/agents/helper.md",
-          "hash": "sha256:b39cf0c05bf5cd1c6aa04d67f7d76d4d95196369b3d278299d10e5e0744a3122",
+          "hash": "sha256:16035e56f837f23d86eb4b17a21138d62217043886ec085ba5089759c82cac73",
           "target": "claude-code",
           "ingredient": "agent/helper"
         }
