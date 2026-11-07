@@ -120,6 +120,7 @@ describe("golden — acme-copilot (spec 61 §3.4)", () => {
       ".github/agents/helper.agent.md",
       ".github/copilot-instructions.md",
       ".github/instructions/api.instructions.md",
+      ".github/mcp.json",
       ".github/prompts/review.prompt.md",
       ".vscode/mcp.json",
     ]);

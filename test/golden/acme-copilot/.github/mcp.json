@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "api": {
+      "command": "npx",
+      "args": [
+        "${workspaceFolder}/api"
+      ],
+      "env": {
+        "TOKEN": "${API_TOKEN}"
+      }
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "X-Key": "${KEY}"
+      }
+    }
+  }
+}
