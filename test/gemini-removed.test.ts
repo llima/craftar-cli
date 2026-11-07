@@ -54,14 +54,15 @@ describe("the name gemini is refused in every input, with the same words", () =>
     const s = await ws(17, ["claude-code", "gemini"], [rule("style")]);
     const e = await loadForge(s.forgeRoot).then(() => null, (x: Error) => x);
     expect(e?.message).toContain(REMOVED);
-    expect(e?.message).toContain("profiles/acme/profile.yaml");
+    // A Forge file is named with native separators (backslashes on Windows): compare with slashes
+    expect(e?.message.replace(/\\/g, "/")).toContain("profiles/acme/profile.yaml");
   });
 
   it("an ingredient's targets naming gemini in a schema-17 Forge → loadForge refuses, naming the file", async () => {
     const s = await ws(17, ["claude-code"], [rule("style", { targets: ["gemini"] })]);
     const e = await loadForge(s.forgeRoot).then(() => null, (x: Error) => x);
     expect(e?.message).toContain(REMOVED);
-    expect(e?.message).toContain("ingredients/rules/style/ingredient.yaml");
+    expect(e?.message.replace(/\\/g, "/")).toContain("ingredients/rules/style/ingredient.yaml");
   });
 
   it("a section marked targets=gemini → the plan refuses, naming the removal", async () => {
