@@ -224,3 +224,14 @@ describe("drift (criterion 7)", () => {
     expect([m.code, m.stderr]).toEqual([1, expect.stringContaining(".opencode/opencode.json holds every mcp ingredient in one file")]);
   });
 });
+
+describe("rule references (spec 63 §9)", () => {
+  it("11. a .claude/rules/ reference in an agent body: claude-code's file, else AGENTS.md, else not in this workspace", T, async () => {
+    const style: IngredientSpec = { meta: { type: "rule", name: "style" }, files: { "rule.md": "Use tabs.\n" } };
+    const a = agent({}, "See .claude/rules/style.md.\n");
+    const body = async (targets: string[]) => fileOf(await planOf(await ws(targets, [style, a])), ".opencode/agents/reviewer.md")!.split("---\n\n")[1];
+    expect(await body(["opencode", "claude-code"])).toBe("See .claude/rules/style.md.\n");
+    expect(await body(["opencode", "agents-md"])).toBe("See AGENTS.md (rule: style).\n");
+    expect(await body(["opencode"])).toBe("See style (rule not in this workspace).\n");
+  });
+});
