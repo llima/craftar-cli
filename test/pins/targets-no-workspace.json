@@ -243,7 +243,7 @@
         "hook": {
           "state": "unsupported",
           "output": [],
-          "note": "not written yet: Cursor's hook events differ — planned for a later release"
+          "note": "through claude-code: Cursor runs the hooks .claude/settings.json holds (craftar settings apply writes them), so writing its own file would run each hook twice"
         },
         "service": {
           "state": "unsupported",
@@ -303,7 +303,7 @@
         "hook": {
           "state": "unsupported",
           "output": [],
-          "note": "not written yet: Copilot's hook events differ — planned for a later release"
+          "note": "through claude-code: the Copilot CLI and VS Code run the hooks .claude/settings.json holds (craftar settings apply writes them; VS Code behind chat.useClaudeHooks), so writing .github/hooks/ would run each hook twice; the cloud agent reads only .github/hooks/"
         },
         "service": {
           "state": "unsupported",
@@ -409,9 +409,11 @@
           "note": "skipped with a warning when aimed at this target"
         },
         "hook": {
-          "state": "unsupported",
-          "output": [],
-          "note": "not written yet: Codex's hooks are reviewed by hand in a trusted project — planned for a later release"
+          "state": "converted",
+          "output": [
+            ".codex/hooks.json"
+          ],
+          "note": "the registration in Claude Code's shape, events and matchers kept (Codex uses Claude Code's names); an event Codex lacks, or an entry with args, skipped with a warning; shell dropped with a warning; the hook's files stay claude-code's, and Codex reviews each hook in /hooks before it runs"
         },
         "service": {
           "state": "unsupported",
@@ -466,9 +468,11 @@
           "note": "skipped with a warning when aimed at this target"
         },
         "hook": {
-          "state": "unsupported",
-          "output": [],
-          "note": "not written yet: Antigravity's hook events differ — planned for a later release"
+          "state": "converted",
+          "output": [
+            ".agents/hooks.json"
+          ],
+          "note": "one named hook per ingredient; PreToolUse, PostToolUse, SessionStart and Stop kept, any other event skipped with a warning; a matcher translated to Antigravity's tool names when it is a list of Claude Code tool names, else skipped with a warning; an entry with args skipped and shell dropped, each with a warning; the hook's files stay claude-code's"
         },
         "service": {
           "state": "unsupported",

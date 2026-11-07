@@ -360,7 +360,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
     expect(gl.find((l) => l.includes("rule/gone"))).toMatch(/^  ✗ rule\/gone\s+not in this Forge$/);
   });
 
-  it("text mode: targets header, matrix, legend and one paths line per writing cell (27) plus services", async () => {
+  it("text mode: targets header, matrix, legend and one paths line per writing cell (29) plus services", async () => {
     const s = await cat();
     const r = runCli(["targets"], { cwd: s.wsRoot });
     expect(r.code).toBe(0);
@@ -376,7 +376,7 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "mcp native native unsupported converted converted unsupported unsupported converted",
       "script native unsupported unsupported unsupported unsupported unsupported unsupported unsupported",
       "steering unsupported native unsupported unsupported unsupported unsupported unsupported unsupported",
-      "hook native unsupported unsupported unsupported unsupported unsupported unsupported unsupported",
+      "hook native unsupported unsupported unsupported unsupported unsupported converted converted",
       "service unsupported unsupported unsupported unsupported unsupported unsupported unsupported unsupported",
     ]);
     expect(norm).toContain("native written in the tool's own place for that type, as the Forge holds it");
@@ -411,6 +411,8 @@ describe("cli — the read-only catalogue (spec 16 §10.3)", () => {
       "claude-code · script .claude/scripts/<file>",
       "kiro · steering .kiro/steering/<name>.md",
       "claude-code · hook .claude/hooks/<file>, .claude/settings.craftar.example.json — the registration is written to .claude/settings.craftar.example.json, to copy",
+      "codex · hook .codex/hooks.json — the registration in Claude Code's shape, events and matchers kept (Codex uses Claude Code's names); an event Codex lacks, or an entry with args, skipped with a warning; shell dropped with a warning; the hook's files stay claude-code's, and Codex reviews each hook in /hooks before it runs",
+      "antigravity · hook .agents/hooks.json — one named hook per ingredient; PreToolUse, PostToolUse, SessionStart and Stop kept, any other event skipped with a warning; a matcher translated to Antigravity's tool names when it is a list of Claude Code tool names, else skipped with a warning; an entry with args skipped and shell dropped, each with a warning; the hook's files stay claude-code's",
     ]);
     // Services are not a target; they get their own line after the paths block (spec 31 §4.7)
     expect(norm[norm.length - 1]).toBe("service: written by sync under .craftar/ for no target; see craftar services");

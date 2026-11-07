@@ -8,6 +8,7 @@ import { runCli } from "./helpers/cli.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import { profile, recipe, scenario, writeFiles, type ForgeSpec, type IngredientSpec, type Scenario } from "./helpers/forge.js";
 import { atLeastWin32 } from "./helpers/timeouts.js";
+import { withoutSlice3Delta } from "./helpers/slice3-delta.js";
 import { acmeSections } from "./helpers/target-sections.js";
 import { acmeIndex } from "./helpers/rules-index.js";
 
@@ -379,7 +380,8 @@ describe("native-targets-3-off baseline pin (spec 61 slice 3, R0)", () => {
 
     // Apply withoutTimestamps filter to both for comparison
     for (const key of Object.keys(observed) as Array<keyof PinFile>) {
-      expect(withoutTimestamps(observed[key])).toEqual(withoutTimestamps(expected[key]));
+      // Spec 61 slice 3's deliberate delta is filtered by name out of both sides (test/helpers/slice3-delta.ts).
+      expect(withoutSlice3Delta(withoutTimestamps(observed[key]))).toEqual(withoutSlice3Delta(withoutTimestamps(expected[key])));
     }
   });
 
