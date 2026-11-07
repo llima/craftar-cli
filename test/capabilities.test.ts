@@ -611,11 +611,16 @@ const UNSUPPORTED: Array<[Target, string, string]> = [
   ...(["rule", "agent", "mcp", "script", "steering", "hook", "service"] as const).map(
     (ty) => ["agent-skills", ty, `agent-skills: 1 ${ty} ingredient(s) have no Agent Skills equivalent — skipped: ${ty}/x`] as [Target, string, string],
   ),
+  // opencode supports agent, command, mcp (spec 63); its rule and skill cells read "through agents-md" / "through agent-skills or
+  // claude-code" and are checked apart, in test/opencode-carriers.test.ts
+  ...(["script", "steering", "hook", "service"] as const).map(
+    (ty) => ["opencode", ty, `opencode: 1 ${ty} ingredient(s) have no OpenCode equivalent — skipped: ${ty}/x`] as [Target, string, string],
+  ),
 ];
 
 describe("written() — the walk decides and warns from the matrix (spec 18 §9.3)", () => {
-  it("the 29 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
-    expect(UNSUPPORTED).toHaveLength(29);
+  it("the 33 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
+    expect(UNSUPPORTED).toHaveLength(33);
     for (const [target, type, text] of UNSUPPORTED) {
       expect(record(await resolutionOf([spec(type, "x")]), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
       const other = target === "claude-code" ? ["kiro"] : ["claude-code"];

@@ -237,9 +237,9 @@ describe("rule references (spec 63 §9)", () => {
 });
 
 describe("review round 1 (spec 63 §6, §8)", () => {
-  it("12. a path scope with a .. segment, a backslash or nothing left is untranslatable", T, async () => {
-    const p = await planOf(await ws(["opencode"], [agent({ tools: ["Read(./../x)", "Read(src/..)", "Read(src\\**)", "Read(//)", "Read(/)", "Read(./)", "Read(src/**)"] })]));
-    expect(ow(p)).toEqual(["Read(./../x)", "Read(src/..)", "Read(src\\**)", "Read(//)", "Read(/)", "Read(./)"].map((t) => `opencode: agent "reviewer": tool "${t}": its scope cannot be translated; no rule written`));
+  it("12. a path scope with a . or .. segment, a backslash or nothing left is untranslatable", T, async () => {
+    const p = await planOf(await ws(["opencode"], [agent({ tools: ["Read(./../x)", "Read(src/..)", "Read(src\\**)", "Read(//)", "Read(/)", "Read(./)", "Read(.)", "Read(src/**)"] })]));
+    expect(ow(p)).toEqual(["Read(./../x)", "Read(src/..)", "Read(src\\**)", "Read(//)", "Read(/)", "Read(./)", "Read(.)"].map((t) => `opencode: agent "reviewer": tool "${t}": its scope cannot be translated; no rule written`));
     expect(fileOf(p, ".opencode/agents/reviewer.md")).toContain('resource: "src/**"');
   });
 

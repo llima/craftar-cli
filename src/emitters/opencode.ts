@@ -263,7 +263,7 @@ function scopeResource(kind: ScopeKind, scope: string): string | null {
       else if (s.startsWith("~")) return null;
       else out = s;
       const rest = out.startsWith("~/") ? out.slice(2) : out.startsWith("/") ? out.slice(1) : out;
-      if (rest === "" || rest.split("/").some((seg) => seg === "..")) return null;
+      if (rest === "" || rest === "." || rest.split("/").some((seg) => seg === ".." || seg === ".")) return null;
       return out;
     }
   }
