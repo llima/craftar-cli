@@ -154,7 +154,7 @@ export async function diffReport(ws: Pick<Workspace, "root">, rows: FileStatus[]
         continue;
       }
       // The new targets' hooks files (hook/*, spec 61 slice 3): what craftar writes there passed credentialIn, but a hand that edited
-      // one may have typed a token into a command, so a reader that is a model does not see it — as the example file.
+      // one may have typed a token into a command, so a reader that is a model does not see it — as the MCP files.
       if (opts.withholdMcp && s.ingredient === "hook/*") {
         out.push(noted(HOOKS_CONTENT_HIDDEN));
         continue;
