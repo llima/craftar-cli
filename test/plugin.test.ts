@@ -97,6 +97,9 @@ describe("the Claude Code plugin (spec 45)", () => {
     expect(text).toContain("`claude mcp list`");
     expect(text).not.toContain("not measured yet");
     expect(text).toContain("enable the plugin only in projects whose files you trust");
+    expect(text).toContain("On native Windows, on 2026-11-07");
+    expect(text).toContain("on native Windows, whether the server waits for the trust dialog");
+    expect(text).not.toContain("macOS and native Windows");
     expect(text).not.toContain("{{");
   });
 
