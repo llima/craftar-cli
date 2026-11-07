@@ -445,6 +445,16 @@ describe("mcp-launcher (spec 42)", () => {
     expect(of(r.checks, "mcp-launcher").map((c) => [c.level, c.message])).toEqual([["warn", 'server "legacy" starts through cmd /c \u2014 Windows only; it does not start on Linux or macOS (.kiro/settings/mcp.json)']]);
   });
 
+  it("3b. copilot names both its files, VS Code's and the Copilot CLI's", async () => {
+    const f = await fixture({
+      ingredients: [server("legacy", LEGACY)],
+      recipes: [recipe("base", ["mcp/legacy"])],
+      profiles: [profile("acme", ["base"], ["claude-code"])],
+    });
+    const r = await run({ home: f.home, workspace: await f.ws("acme-a", { profile: "acme", targets: ["copilot"] }) });
+    expect(of(r.checks, "mcp-launcher").map((c) => [c.level, c.message])).toEqual([["warn", 'server "legacy" starts through cmd /c \u2014 Windows only; it does not start on Linux or macOS (.vscode/mcp.json, .github/mcp.json)']]);
+  });
+
   it("4. no MCP server → no mcp-launcher line", async () => {
     const f = await fixture(FORGE);
     const r = await run({ home: f.home, workspace: await f.ws("acme-a") });

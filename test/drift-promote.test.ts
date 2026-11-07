@@ -845,6 +845,36 @@ describe("cli — drift promote", () => {
     expect(r.stderr).toBe("error: .cursor/mcp.json holds every mcp ingredient in one file — edit the mcp ingredient in the Forge\n");
     expect(porcelain(s.forgeRoot)).toBe("");
   });
+
+  it("27. copilot's .github/mcp.json is an MCP file: drift show says why, promote refuses it (D6)", async () => {
+    const s = await scenario(
+      {
+        ingredients: [{ meta: { type: "mcp", name: "srv", server: { command: "npx", args: ["srv"] } } }],
+        recipes: [recipe("base", ["mcp/srv"])],
+        profiles: [profile("acme", ["base"], ["copilot"])],
+      },
+      { config: { profile: "acme" } },
+    );
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 15 }));
+    gitInit(s.forgeRoot);
+    expect(runCli(["sync", "--workspace", s.wsRoot]).code).toBe(0);
+
+    const mcpPath = path.join(s.wsRoot, ".github/mcp.json");
+    const mcpContent = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+    mcpContent.mcpServers.srv.args = ["srv-edited"];
+    await fs.writeFile(mcpPath, JSON.stringify(mcpContent, null, 2));
+
+    const show = runCli(["drift", "show", "--json", "--workspace", s.wsRoot]);
+    const row = JSON.parse(show.stdout).files.find((f: { path: string }) => f.path === ".github/mcp.json");
+    expect(row).toMatchObject({ state: "drift", target: "copilot", promotable: false, reason: ".mcp.json" });
+
+    const r = runCli(["drift", "promote", ".github/mcp.json", "--workspace", s.wsRoot]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("error: .github/mcp.json holds every mcp ingredient in one file — edit the mcp ingredient in the Forge\n");
+    expect(porcelain(s.forgeRoot)).toBe("");
+  });
 });
 
 /** Two profiles sharing `base`. */

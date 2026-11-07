@@ -21,6 +21,9 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
  */
 export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
 
+/** The copilot target's second MCP file, for the Copilot CLI, which reads `.github/mcp.json` (or `.mcp.json`) and never `.vscode/mcp.json`. */
+export const COPILOT_CLI_MCP_FILE = ".github/mcp.json";
+
 /** What effectiveTargets reads of a resolution: agents-md.primary and the workspace's targets. */
 export interface TargetsView {
   primary: boolean;

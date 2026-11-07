@@ -212,13 +212,13 @@ export const CAPABILITIES = {
     command: {
       state: "converted",
       output: [".github/prompts/<name>.prompt.md"],
-      note: "written as a VS Code prompt file with description, argument-hint and agent: agent; with agent-skills among the targets, a command with the default targets is left to .agents/skills/",
+      note: "written as a VS Code prompt file with description, argument-hint and agent: agent, which the Copilot CLI does not read; with agent-skills among the targets, a command with the default targets is left to .agents/skills/, which both read",
     },
     skill: { state: "unsupported", output: [], note: "through agent-skills: Copilot reads .agents/skills/, written by the agent-skills target" },
     mcp: {
       state: "converted",
-      output: [".vscode/mcp.json"],
-      note: "the servers under servers (VS Code's key), each kept whole; a ${NAME} reference becomes ${env:NAME}; the Copilot CLI reads the .mcp.json claude-code writes",
+      output: [".vscode/mcp.json", ".github/mcp.json"],
+      note: "the servers in two files, each server kept whole: .vscode/mcp.json under servers (VS Code's key), a ${NAME} reference written ${env:NAME}; .github/mcp.json under mcpServers, ${NAME} kept, for the Copilot CLI, which never reads .vscode/mcp.json",
     },
     script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },

@@ -1,7 +1,7 @@
 {
   "planned": {
-    ".claude/agents/api-reviewer.md": "---\nname: api-reviewer\ndescription: Reviews API changes against .claude/rules/style.md\ntools: \n---\nReview the diff.\nFollow .claude/rules/style.md and .claude/rules/release.md.\nSee [the style](.claude/rules/style.md#scope).\nNotes: .claude/rules/kiro-notes.md\n",
-    ".claude/agents/planner.md": "---\nname: planner\ntools: \n---\nPlan the work.\n",
+    ".claude/agents/api-reviewer.md": "---\nname: api-reviewer\ndescription: Reviews API changes against .claude/rules/style.md\n---\nReview the diff.\nFollow .claude/rules/style.md and .claude/rules/release.md.\nSee [the style](.claude/rules/style.md#scope).\nNotes: .claude/rules/kiro-notes.md\n",
+    ".claude/agents/planner.md": "---\nname: planner\n---\nPlan the work.\n",
     ".claude/commands/review.md": "---\ndescription: Run a review\n---\nReview with .claude/rules/style.md in mind.\n",
     ".claude/rules/api.md": "# API\nEvery endpoint follows .claude/rules/style.md.\n",
     ".claude/rules/style.md": "# Style\nWrite plain English. See .claude/rules/api.md for the API rules.\n",
@@ -168,13 +168,13 @@
     "files": [
       {
         "path": ".claude/agents/api-reviewer.md",
-        "hash": "sha256:c4b46b06d02e93065f575fdbcaaa4699787c02ae1e9b7780e8e792562c5b5013",
+        "hash": "sha256:d5622c6b620b0e8b567c5bd6bd7aff8ed1cee50b420e13de59064a82cbd05275",
         "target": "claude-code",
         "ingredient": "agent/api-reviewer"
       },
       {
         "path": ".claude/agents/planner.md",
-        "hash": "sha256:c960a56ee250b1091d821ebfb447a7bfa13ce9ef6ac87f642eea68fa252b2dc0",
+        "hash": "sha256:84c06b0118beb2d4b076d358120fd6f53bd51795d13c37a12968af74a020efce",
         "target": "claude-code",
         "ingredient": "agent/planner"
       },
@@ -288,7 +288,7 @@
         "ingredient": "agent/api-reviewer",
         "lock": {
           "path": ".claude/agents/api-reviewer.md",
-          "hash": "sha256:c4b46b06d02e93065f575fdbcaaa4699787c02ae1e9b7780e8e792562c5b5013",
+          "hash": "sha256:d5622c6b620b0e8b567c5bd6bd7aff8ed1cee50b420e13de59064a82cbd05275",
           "target": "claude-code",
           "ingredient": "agent/api-reviewer"
         }
@@ -300,7 +300,7 @@
         "ingredient": "agent/planner",
         "lock": {
           "path": ".claude/agents/planner.md",
-          "hash": "sha256:c960a56ee250b1091d821ebfb447a7bfa13ce9ef6ac87f642eea68fa252b2dc0",
+          "hash": "sha256:84c06b0118beb2d4b076d358120fd6f53bd51795d13c37a12968af74a020efce",
           "target": "claude-code",
           "ingredient": "agent/planner"
         }

@@ -26,7 +26,7 @@ export interface DriftRow {
 export const unmanaged = (p: string) =>
   `${p} is not a file craftar manages in this workspace — pass the workspace-relative path as \`craftar status\` prints it (forward slashes)`;
 
-/** The file is one of the MCP configuration files (every `MCP_FILE` entry and the example file): all are tagged `mcp/*`. */
+/** The file is one of the MCP configuration files (every `MCP_FILE` entry, copilot's `COPILOT_CLI_MCP_FILE` and the example file): all are tagged `mcp/*`. */
 export const mcpTagged = (s: Pick<FileStatus, "ingredient">): boolean => s.ingredient?.startsWith("mcp/") === true;
 
 /** The reason of a file agents-md.primary reworded (spec 41 §4.10): promoting it would carry the rewording into the Forge. */
