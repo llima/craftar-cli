@@ -112,6 +112,17 @@ describe("GEMINI.md", () => {
     expect(text(p, "GEMINI.md")).toContain("- `.kiro/steering/api.md` — applies to `src/**`");
   });
 
+  it("review 3: with claude-code and agents-md, a scoped rule only kiro writes is named by its steering file, in a body and in the index", async () => {
+    const p = await planOf(await ws(17, ["claude-code", "agents-md", "kiro", "gemini"], [
+      rule("idx", { targets: ["gemini"] }, "See .claude/rules/api.md.\n\n{{craftar.rules.index}}\n"),
+      rule("api", { inclusion: "fileMatch", fileMatchPattern: "src/**", description: "API", targets: ["agents-md", "kiro", "gemini"] }),
+    ]));
+    const t = text(p, "GEMINI.md");
+    expect(t).toContain("See .kiro/steering/api.md.");
+    expect(t).toContain("`.kiro/steering/api.md`");
+    expect(t).not.toContain("AGENTS.md (rule: api)");
+  });
+
   it("review: the rules index in GEMINI.md names a rule's place there; a placeholder not alone on its line is the misplaced warning", async () => {
     const indexed = await planOf(await ws(17, ["gemini"], [rule("idx", {}, "Rules:\n{{craftar.rules.index}}\n"), rule("style", { description: "Style" })]));
     expect(text(indexed, "GEMINI.md")).toContain("GEMINI.md (rule: style)");

@@ -209,6 +209,9 @@ export function ruleRefState(
     // Spec 61 §10: K1 is the file the citing target writes; then claude-code's, then AGENTS.md, as for kiro (no steering here)
     if (rule && ruleTargets && targets.includes(mode) && appliesTo(ruleTargets, mode) && ownWrites(mode, rule.meta)) return "K1";
     if (rule && ruleTargets && hasCc && appliesTo(ruleTargets, "claude-code")) return "K2";
+    // A scoped rule kiro writes is a pointer to its steering file in AGENTS.md and in GEMINI.md alike, so gemini names that file before
+    // AGENTS.md (geminiPlace gives it). The same gap in codex and copilot predates spec 61 slice 3 and is recorded as tech debt.
+    if (mode === "gemini" && rule && ruleTargets && rule.meta.type === "rule" && rule.meta.inclusion !== "always" && ruleWriter(targets, ruleTargets) === "kiro") return "K1";
     if (rule && ruleTargets && hasMd && appliesTo(ruleTargets, "agents-md")) return "K3";
     // Gemini names no rule file of its own, but every rule aimed at it is in GEMINI.md, embedded or listed: K1 names that place (geminiPlace)
     if (mode === "gemini" && rule && ruleTargets && targets.includes("gemini") && appliesTo(ruleTargets, "gemini")) return "K1";
