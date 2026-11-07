@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { loadWorkspace, plan } from "../src/core/sync.js";
+import { apply, loadWorkspace, plan, readLock, status } from "../src/core/sync.js";
+import { HOOKS_CONTENT_HIDDEN, diffReport } from "../src/core/report.js";
 import { antigravityMatcher } from "../src/emitters/hooks.js";
 import { profile, recipe, scenario, type IngredientSpec } from "./helpers/forge.js";
 
@@ -148,5 +149,27 @@ describe("review round: files nobody writes, and the hooks files on drift", () =
 
   it("a matcher with spaces around a name is a regex for Claude Code, so it has no translation", () => {
     expect(antigravityMatcher("Bash | Edit")).toBeNull();
+  });
+});
+
+describe("review round 2: the diff tool of craftar mcp withholds a hand-edited hooks file", () => {
+  it("withholdMcp true → the hooks note, nothing of the disk; false (the CLI) → the file's text", async () => {
+    const s: Scenario = await scenario({ ingredients: [guard], recipes: [recipe("base", ["hook/guard"])], profiles: [profile("acme", ["base"], ["claude-code", "codex", "antigravity"])] }, { config: { profile: "acme" } });
+    cleanups.push(s.cleanup);
+    await fs.writeFile(path.join(s.forgeRoot, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 16 }));
+    const load = () => loadWorkspace(s.wsRoot, { home: process.env.CRAFTAR_HOME });
+    let w = await load();
+    let p = await plan(w);
+    await apply(w, p, await status(w, p, await readLock(w.root)), {});
+    for (const f of [".codex/hooks.json", ".agents/hooks.json"]) await fs.writeFile(path.join(s.wsRoot, f), '{"SENTINEL-DISK": true}\n');
+    w = await load();
+    p = await plan(w);
+    const rows = (await status(w, p, await readLock(w.root))).filter((r) => r.path.endsWith("hooks.json"));
+    expect(rows.map((r) => r.state)).toEqual(["drift", "drift"]);
+    const hidden = await diffReport(w, rows, { withholdMcp: true });
+    expect(hidden.map((r) => r.note)).toEqual([HOOKS_CONTENT_HIDDEN, HOOKS_CONTENT_HIDDEN]);
+    expect(JSON.stringify(hidden)).not.toContain("SENTINEL-DISK");
+    const shown = await diffReport(w, rows, { withholdMcp: false });
+    expect(shown.every((r) => r.note === null && r.disk!.includes("SENTINEL-DISK"))).toBe(true);
   });
 });
