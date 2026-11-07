@@ -45,7 +45,7 @@ import { serve } from "./mcp.js";
 import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
-import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
+import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, GEMINI_ORPHAN_WHY, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
 import type { Lock, Registry } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, overriddenRoot, withLoadWarnings, type CatalogueContext, type ContextSource, type IngredientEntry } from "./core/catalogue.js";
@@ -94,7 +94,7 @@ import type { Eol } from "./core/text.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { syncWorkspace, editRecipes, confirmWrites, confirmSettings, DISCARDED_ORPHAN } from "./core/write-actions.js";
 import { localKeys, readLocalFile } from "./core/workspace-yaml.js";
-import { HUNK_CLASSES, INGREDIENT_TYPES, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
+import { HUNK_CLASSES, INGREDIENT_TYPES, REMOVED_TARGET, UnifyPlanSchema, type HunkClass, type HunkSuggestion, type IngredientRef, type IngredientType, type Take, type UnifyPlan } from "./schema/index.js";
 import { YamlSyntaxError, parseYamlText } from "./core/yaml-read.js";
 import { recordedServices, pendingLine, upRefusal, strayEnvRefusal, composeArgv, downArgv, readPs, dockerVersion, dockerFault, dockerRunner, projectName, statusReport as servicesStatusReport, type Recorded } from "./core/services.js";
 import { errorText } from "./core/schema-fault.js";
@@ -112,7 +112,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.3.1");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.4.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -398,7 +398,7 @@ program
   .option("--new-profile <name>", "create this profile in the Forge directory (recipes and targets from --like and the recipe flags), then start the workspace on it; nothing is committed")
   .option("--like <profile>", "with --new-profile: start the new profile's recipes and targets from this profile's — nothing else of it is copied")
   .option("--ref <ref>", "branch, tag or full SHA of a remote Forge")
-  .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, gemini); omitted, the workspace follows the profile's")
+  .option("--targets <a,b>", "targets to write in craftar.yaml, or of the new profile with --new-profile (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity); omitted, the workspace follows the profile's")
   .option("--add-recipe <name>", "add a recipe to the profile's, or to the new profile's with --new-profile (repeatable)", collect, [])
   .option("--remove-recipe <name>", "remove a recipe from the profile's, or from the new profile's with --new-profile (repeatable)", collect, [])
   .option("--replace", "let --add-recipe take a slot another recipe holds", false)
@@ -981,7 +981,9 @@ async function printFileDiff(root: string, s: FileStatus, opts: { isPrimary?: bo
   } else if (s.state === "orphan") {
     // A removal: the file exists on disk but the Forge no longer produces it
     console.log(pc.bold(`--- ${s.path} (disk, orphan)`));
-    const orphanReason = opts.isPrimary
+    const orphanReason = s.target === REMOVED_TARGET
+      ? `${GEMINI_ORPHAN_WHY} — sync removes it`
+      : opts.isPrimary
       ? "written to AGENTS.md only — sync removes it"
       : opts.carriedTo !== undefined
         ? `written to ${opts.carriedTo} only — sync removes it`

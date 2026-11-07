@@ -16,7 +16,7 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
 import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockEntryV5, type LockEntryV6, type LockV2, type LockV3, type LockV4, type LockV5, type LockV6, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyOwner } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockEntryV5, type LockEntryV6, type LockV2, type LockV3, type LockV4, type LockV5, type LockV6, type LockOwner, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyOwner, REMOVED_TARGET } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -26,13 +26,12 @@ import { copilot } from "../emitters/copilot.js";
 import { agentSkills } from "../emitters/agent-skills.js";
 import { codex } from "../emitters/codex.js";
 import { antigravity } from "../emitters/antigravity.js";
-import { gemini } from "../emitters/gemini.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
 import { decodeForScan } from "./secrets.js";
 import { INTEGRATIONS_PREFIX, readsIntegrations } from "./integrations.js";
-import { appliesTo, carriedPath, carriedTo, carrierFile, effectiveTargets, GEMINI_MD } from "../emitters/shared.js";
+import { appliesTo, carriedPath, carriedTo, carrierFile, effectiveTargets } from "../emitters/shared.js";
 import { forgeFor, overriddenBase, readsLocalOverride, shownIngredientRef, shownLocalName } from "./profile-local.js";
 import { familyOf } from "./profile-extends.js";
 import { RULES_INDEX_KEY, RULES_INDEX_LINE, RULES_INDEX_TOKEN, belowGateLiteralWarning, ignoredValueWarning, undescribedRulesWarning, misplacedPlaceholderWarning, nonBodyPlaceholderWarning } from "./rules-index.js";
@@ -46,7 +45,7 @@ export { AGENTS_MD_BUDGET_KEY };
 export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
 
 // Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
-const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor, copilot, "agent-skills": agentSkills, codex, antigravity, gemini };
+const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor, copilot, "agent-skills": agentSkills, codex, antigravity };
 
 /**
  * Runs one target's emitter on the walk of what the matrix says it writes. The walk warns about the
@@ -994,11 +993,10 @@ export async function plan(ws: Workspace): Promise<Plan> {
     // Scan the planned files for misplaced placeholders (not alone on line).
     // This detects lines in the PLANNED content, not the ingredient body.
     // Applies to rule bodies (.claude/rules/<name>.md, .kiro/steering/<name>.md, and since spec 61 .cursor/rules/<name>.mdc,
-    // .github/instructions/<name>.instructions.md, .github/copilot-instructions.md, .agents/rules/<name>.md and GEMINI.md) and AGENTS.md.
+    // .github/instructions/<name>.instructions.md, .github/copilot-instructions.md, .agents/rules/<name>.md) and AGENTS.md.
     const misplacedLocations: string[] = [];
     const isRuleOrSteeringOrAgentsMd = (p: string) =>
       p === "AGENTS.md" ||
-      p === GEMINI_MD ||
       p === ".github/copilot-instructions.md" ||
       /^\.claude\/rules\/[^/]+\.md$/.test(p) ||
       /^\.kiro\/steering\/[^/]+\.md$/.test(p) ||
@@ -1301,6 +1299,11 @@ export function claudeMdBlockedMessage(file: string): string {
   return `agents-md.primary: ${file} keeps Claude Code from reading AGENTS.md — add a line @AGENTS.md to CLAUDE.md, or set Project instructions to claude-md-and-agents-md`;
 }
 
+/** Why a file a 1.3.x lock records for `gemini` is an orphan (1.4.0 removed the target): the one wording, read by `diff`'s header too. */
+export const GEMINI_ORPHAN_WHY = "the gemini target was removed in craftar 1.4.0";
+/** The orphan reason of such a file: one spelling for `sync` and the `sync` tool. */
+export const GEMINI_ORPHAN = `orphan: ${GEMINI_ORPHAN_WHY}`;
+
 /**
  * Why `apply()` removed `path`: the orphan wording of `craftar sync` and of the `sync` tool of `craftar mcp`, one copy
  * (spec 41 §4.8).
@@ -1308,6 +1311,7 @@ export function claudeMdBlockedMessage(file: string): string {
 export function orphanReason(p: Plan, statuses: readonly FileStatus[], path: string): string {
   const s = statuses.find((x) => x.path === path);
   if (s !== undefined && primaryOrphan(p, s)) return "orphan: written to AGENTS.md only (agents-md.primary)";
+  if (s?.target === REMOVED_TARGET) return GEMINI_ORPHAN;
   const carried = p.carried.find((c) => c.path === path);
   return carried ? `orphan: written to ${carried.carrier} only` : "orphan: no longer produced by the Forge";
 }
@@ -1384,7 +1388,7 @@ export type FileState =
 export interface FileStatus {
   path: string;
   state: FileState;
-  target?: Owner;
+  target?: LockOwner;
   ingredient?: string;
   planned?: PlannedFile;
   lock?: LockEntry | LockEntryV3 | LockEntryV4 | LockEntryV5 | LockEntryV6;
@@ -1595,7 +1599,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
 
   // Lock schema selection (spec 31 §5.2, spec 61 §7, slice 2's G1): the highest schema the lock's targets and its entries need
   // (`lockSchemaFor`) — kept entries from a previous lock included, even when no file is emitted for them:
-  // - 6 when one names a target 1.2.0 did not know (gemini);
+  // - 6 when a kept entry of a 1.3.x lock names gemini (removed in 1.4.0);
   // - 5 when one names a slice-2 target (codex, antigravity);
   // - 4 when one names a slice-1 target (cursor, copilot, agent-skills);
   // - 3 when an entry has target `services`;

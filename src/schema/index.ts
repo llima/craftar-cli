@@ -35,11 +35,30 @@ function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
  * All AI-coder targets Craftar supports. Spec 61 §7: `cursor` added at Forge schema 15, `copilot` at schema 15.
  * Spec 61 §6, Ruling 3: `agent-skills` writes `.agents/skills/`, read by Cursor, Copilot, Codex and others.
  * Spec 61 slice 2: `codex` and `antigravity` at Forge schema 16 (its plan's G1, ruled 2026-11-06).
- * Spec 61 slice 3: `gemini` at Forge schema 17 (its plan's G2, ruled 2026-11-07).
+ * Spec 61 slice 3 added `gemini` at Forge schema 17 in 1.3.0; 1.4.0 removed it (the user's ruling of 2026-11-07, a dated exception
+ * to the 1.x promise, README *Compatibility*): see `REMOVED_TARGET`.
  */
-export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot", "agent-skills", "codex", "antigravity", "gemini"] as const;
+export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot", "agent-skills", "codex", "antigravity"] as const;
 export type Target = (typeof TARGETS)[number];
-export const TargetSchema = z.enum(TARGETS);
+
+/**
+ * The target 1.3.0 shipped and 1.4.0 removed (the user's ruling of 2026-11-07). Its name is refused in every input with
+ * `GEMINI_REMOVED`; a lock at schema 6 may still hold an entry it owns, read as an orphan (`LockOwner`).
+ */
+export const REMOVED_TARGET = "gemini";
+export type RemovedTarget = typeof REMOVED_TARGET;
+
+/** The one wording of the refusal of `gemini` in an input: fixed words, never a value read from a file. */
+export const GEMINI_REMOVED =
+  "the gemini target was removed in craftar 1.4.0 (the Gemini CLI no longer accepts Google login for individuals) — remove gemini from targets; the antigravity target covers the same use";
+
+/** A target name: one of `TARGETS`; `gemini` is refused with `GEMINI_REMOVED`, any other name by the enum's own wording. */
+export const TargetSchema = z
+  .unknown()
+  .superRefine((v, ctx) => {
+    if (v === REMOVED_TARGET) ctx.addIssue({ code: z.ZodIssueCode.custom, message: GEMINI_REMOVED });
+  })
+  .pipe(z.enum(TARGETS));
 
 /**
  * The AI-coder targets Craftar supported before schema 15 (spec 61 §7, Ruling 4).
@@ -75,6 +94,8 @@ export const SLICE_2_TARGETS = [...SLICE_1_TARGETS, "codex", "antigravity"] as c
 export const OWNERS = [...TARGETS, "services"] as const;
 export type Owner = (typeof OWNERS)[number];
 export const OwnerSchema = z.enum(OWNERS);
+/** The owner of a lock entry as read: every owner, plus `gemini` in a lock written by 1.3.x (lock schema 6 only), read as an orphan. */
+export type LockOwner = Owner | RemovedTarget;
 
 /* ------------------------------------------------------------------ */
 /* Ingredients                                                          */
@@ -1050,7 +1071,10 @@ export const FORGE_SCHEMA_LIST_PARAMS = 14;
 export const FORGE_SCHEMA_NATIVE_TARGETS = 15;
 /** Forge schema that allows spec 61 slice 2's targets (codex, antigravity) in ingredients/profiles/sections (its plan's G1). */
 export const FORGE_SCHEMA_SLICE_2_TARGETS = 16;
-/** Forge schema that allows spec 61 slice 3's target (gemini) in ingredients/profiles/sections (its plan's G2). */
+/**
+ * Forge schema 17, which allowed spec 61 slice 3's target (gemini) in 1.3.0. Since 1.4.0 it gates no target (gemini was removed, the
+ * user's ruling of 2026-11-07); a Forge that declares it still loads (README *Compatibility*).
+ */
 export const FORGE_SCHEMA_GEMINI = 17;
 
 export const ForgeManifestSchema = z.object({
@@ -1201,15 +1225,19 @@ export const LockSchemaV5 = LockSchemaV4.extend({
   targets: z.array(z.enum(SLICE_2_TARGETS)),
   files: z.array(LockEntrySchemaV5),
 });
-/** Lock entry for schema 6 (spec 61 slice 3, G2): any owner (`OwnerSchema`). */
-export const LockEntrySchemaV6 = LockEntrySchemaV4.extend({ target: OwnerSchema });
 /**
- * Lock schema 6 (spec 61 slice 3, G2): written exactly when the lock's `targets` or one of its entries names a target 1.2.0 did not
- * know (`gemini`). Every craftar before 1.3.0 refuses it by name.
+ * Lock entry for schema 6 (spec 61 slice 3, G2): any owner (`OwnerSchema`), or `gemini` (`REMOVED_TARGET`) — a 1.3.x lock still
+ * reads, and the entry becomes an orphan since nothing plans it (1.4.0).
+ */
+export const LockEntrySchemaV6 = LockEntrySchemaV4.extend({ target: z.enum([...OWNERS, REMOVED_TARGET]) });
+/**
+ * Lock schema 6 (spec 61 slice 3, G2): written by 1.3.x when the lock's `targets` or one of its entries named `gemini`; every craftar
+ * before 1.3.0 refuses it by name. Since 1.4.0 it is still read, and written only while a kept entry (a hand-edited orphan) names
+ * `gemini`.
  */
 export const LockSchemaV6 = LockSchemaV4.extend({
   schema: z.literal(6),
-  targets: z.array(TargetSchema),
+  targets: z.array(z.enum([...TARGETS, REMOVED_TARGET])),
   files: z.array(LockEntrySchemaV6),
 });
 /** Supported lock schemas; anything else is refused by name in `readLock`. */

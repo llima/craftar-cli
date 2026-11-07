@@ -1,7 +1,7 @@
 import path from "node:path";
 import { mergedProfile as familyProfile } from "./profile-extends.js";
 import YAML from "yaml";
-import { TARGETS, type Lock, type WorkspaceConfig } from "../schema/index.js";
+import { GEMINI_REMOVED, REMOVED_TARGET, TARGETS, type Lock, type WorkspaceConfig } from "../schema/index.js";
 import { planClone } from "./clone.js";
 import { newProfile, withProfile } from "./new-profile.js";
 import { planRecipeEdit } from "./recipe-edit.js";
@@ -101,8 +101,10 @@ export function checkInitFlags(given: {
     throw new Error("--forge holds credentials in the URL — remove them and let git authenticate (credential helper, SSH agent; see README › Remote Forge)");
 
   // N7: unknown target
-  for (const t of given.targets ?? [])
+  for (const t of given.targets ?? []) {
+    if (t === REMOVED_TARGET) throw new Error(GEMINI_REMOVED);
     if (!(TARGETS as readonly string[]).includes(t)) throw new Error(`unknown target "${t}" (${TARGETS.join(", ")})`);
+  }
 
   // N11: ref with path Forge (only when both forge and ref are given)
   if (given.forge !== undefined && given.ref !== undefined && classifyForge(given.forge) !== "url")

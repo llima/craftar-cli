@@ -3,7 +3,7 @@ import path from "node:path";
 import { escapeReason } from "./contain.js";
 import { slotLabel } from "./integrations.js";
 import { templatedMetadataEdit } from "./metadata-params.js";
-import { isLegacyOwner, type Owner } from "../schema/index.js";
+import { isLegacyOwner, type LockOwner } from "../schema/index.js";
 import type { FileStatus, Plan } from "./sync.js";
 import { hashNormalized } from "./text.js";
 
@@ -14,7 +14,7 @@ export type ForgeSide = "same" | "changed" | "removed";
 export interface DriftRow {
   path: string;
   state: "drift" | "orphan-drift";
-  target: Owner;
+  target: LockOwner;
   ingredient: string;
   forge: ForgeSide;
   promotable: boolean;

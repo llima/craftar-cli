@@ -374,7 +374,7 @@ describe("capability matrix against emitters (spec 16 §10.2)", () => {
               continue;
             }
             // Shared files: AGENTS.md belongs to type=rule (agents-md); copilot-instructions.md for copilot
-            if (type === "rule" && f.ingredient === "rule/*" && (f.path === "AGENTS.md" || f.path === ".github/copilot-instructions.md" || f.path === "GEMINI.md")) {
+            if (type === "rule" && f.ingredient === "rule/*" && (f.path === "AGENTS.md" || f.path === ".github/copilot-instructions.md")) {
               cellFiles.push(f);
               continue;
             }
