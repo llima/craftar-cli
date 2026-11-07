@@ -1,5 +1,5 @@
 import { NO_LISTS, type ListContext } from "./list-params.js";
-import { FORGE_SCHEMA_TARGET_SECTIONS, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
+import { FORGE_SCHEMA_TARGET_SECTIONS, GEMINI_REMOVED, REMOVED_TARGET, SECTION_NAME, TARGETS, type Owner, type Target } from "../schema/index.js";
 import { FORGE_MANIFEST } from "./forge.js";
 import { allowsTarget, nativeTargetNearMiss } from "./native-targets.js";
 import { substitute } from "./resolve.js";
@@ -95,6 +95,8 @@ function validateTargets(name: string, value: string, targetSchema: number): str
   const seen = new Set<string>();
 
   for (const part of parts) {
+    // The target 1.4.0 removed: its own fixed words (the user's ruling of 2026-11-07)
+    if (part === REMOVED_TARGET) return `section ${name} targets=: ${GEMINI_REMOVED}`;
     // Below the gate, check if it's a known native target (near miss)
     if ((TARGETS as readonly string[]).includes(part) && !allowsTarget(targetSchema, part as Target)) {
       // A known target below its schema gate

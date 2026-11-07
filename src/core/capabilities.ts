@@ -290,29 +290,6 @@ export const CAPABILITIES = {
     },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
-  gemini: {
-    rule: {
-      state: "converted",
-      output: ["GEMINI.md"],
-      note: "with agents-md among the targets GEMINI.md imports AGENTS.md (@AGENTS.md) and every rule with the default targets is left to it; otherwise, and for a rule listed for gemini, the always-on rules are embedded and a scoped rule is listed at the file claude-code or kiro writes for it, or embedded with its scope (Gemini has no scoping)",
-    },
-    agent: {
-      state: "converted",
-      output: [".gemini/agents/<name>.md"],
-      note: "name, description and model kept, model written as inherit unless it names a Gemini model; tools are not written (Gemini's tool names differ), dropped with a warning",
-    },
-    command: {
-      state: "converted",
-      output: [".gemini/commands/<name>.toml"],
-      note: "written as TOML with description and prompt, $ARGUMENTS written as {{args}}; argument-hint and allowed-tools have no field and are dropped with a warning; with agent-skills among the targets, a command with the default targets is left to .agents/skills/",
-    },
-    skill: { state: "unsupported", output: [], note: "through agent-skills: Gemini reads .agents/skills/, written by the agent-skills target" },
-    mcp: { state: "unsupported", output: [], note: "not written: Gemini's MCP servers live in .gemini/settings.json, which holds every other Gemini setting — configure them there by hand" },
-    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-    hook: { state: "unsupported", output: [], note: "not written: Gemini's hooks live in .gemini/settings.json, which holds every other Gemini setting — configure them there by hand" },
-    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -368,8 +345,7 @@ const writtenIs: [
   Equal<Written<"agent-skills">, "command" | "skill">,
   Equal<Written<"codex">, "agent" | "hook">,
   Equal<Written<"antigravity">, "rule" | "agent" | "mcp" | "hook">,
-  Equal<Written<"gemini">, "rule" | "agent" | "command">,
-] = [true, true, true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true];
 void writtenIs;
 
 /**
@@ -386,7 +362,6 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; 
   "agent-skills": { label: "Agent Skills", per: "type" },
   codex: { label: "Codex", per: "type", carriers: { rule: "agents-md", command: "agent-skills", skill: "agent-skills" } },
   antigravity: { label: "Antigravity", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
-  gemini: { label: "Gemini", per: "type", carriers: { skill: "agent-skills" } },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {

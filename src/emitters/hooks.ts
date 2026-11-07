@@ -34,7 +34,7 @@ function rendered(ctx: EmitBase, ing: ResolvedIngredient): HooksObject | null {
  * The notes every new target that writes hooks shares (spec 61 slice 3): a hook with no registration writes nothing for it; a hook's
  * files are written by the `claude-code` target only, so when `claude-code` will not write them — not among the workspace's targets,
  * or the hook not aimed at it (`effectiveTargets`, the carrier test) — the files reach nothing and that is said; and
- * `${CLAUDE_PROJECT_DIR}` is set by Claude Code (and Cursor, Gemini), not documented for Codex or Antigravity.
+ * `${CLAUDE_PROJECT_DIR}` is set by Claude Code (and Cursor), not documented for Codex or Antigravity.
  */
 function sharedNotes(ctx: EmitBase, target: string, label: string, ing: ResolvedIngredient, obj: HooksObject | null): void {
   const claudeWrites = ctx.resolution.targets.includes("claude-code") && appliesTo(effectiveTargets(ing.meta, ctx.resolution), "claude-code");
