@@ -22,16 +22,19 @@ function strip(x: unknown): unknown {
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
 const STRIPPED: Record<string, string> = {
-  "agents-md-primary-off": "ba44f2fc65fa741ae5557f701dfcb9105c8ad098fa24c9d7cc49b9c904150987",
+  // agents-md-primary-off and rules-index-off moved for 1.5.0 (claude-code leaves out an agent's empty tools line; the regenerated
+  // pins were checked by script to differ only by that line and its hashes).
+  "agents-md-primary-off": "a491269a773b7629560b85e32833b4739142322623c03df1d15d123df51a0656",
   "profile-local-off": "0c8762015e0b291e895301a30b169ef40d03e449fc08aa20a81919803b4e8892",
   "real-path-containment-off": "e55dbd181272524088b1974f67824470dec4df888424e1467a190adcde182aca",
-  "rules-index-off": "c10b5ff09bf0048cec99d37b21fd54bc09c1220ede1b625b3b35156dc150d840",
+  "rules-index-off": "bf2f8f6b6e387363a5037b521e6ed5785e236b538dec4cf310081f18bf593f03",
   "target-sections-off": "0828cb9c57f43e125ad4e6935e86f1649651523c33a95b82d435e6a47ea224b1",
 };
 const UNMOVED: Record<string, string> = {
   "check-committed-off": "a23e75649bb333461ba89e062c192bae2ce2659a6a7b693c744034974aa1c976",
-  // metadata-params-off's hash moved for spec 57 (kiro writes LF on a new file); it still holds no skill.
-  "metadata-params-off": "b453c1786fcca3e9e740c381627f4a29c6b1d77004ddcc27b4ffa985a5edac47",
+  // metadata-params-off's hash moved for spec 57 (kiro writes LF on a new file) and for 1.5.0 (an agent's empty tools line left
+  // out, checked by script); it still holds no skill.
+  "metadata-params-off": "9e524be2a9a87e54d3ea8367836290c7a8c092699764238abd12b7a821887505",
   "settings-apply-off": "1369dc58b74b5c287edb7885680b92c8a11c455d32cf9eb3b178adf27e4d2676",
 };
 
