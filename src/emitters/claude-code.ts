@@ -116,7 +116,7 @@ export const claudeCode: Emitter<"claude-code"> = {
         case "agent": {
           const path = `.claude/agents/${outName(m)}.md`;
           const { raw, description, body } = resolveDoc(path, ing.ref, m, await ctx.text(ing, m.file, "claude-code"));
-          const doc = serializeFrontmatter({ name: outName(m), description, tools: m.tools, model: m.model }, body, { raw });
+          const doc = serializeFrontmatter({ name: outName(m), description, tools: m.tools.length ? m.tools : undefined, model: m.model }, body, { raw });
           out.push(await textFile(ctx, path, doc, t, ing.ref));
           break;
         }
