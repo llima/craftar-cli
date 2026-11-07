@@ -1,6 +1,5 @@
 ---
 name: helper
-tools: 
 ---
 Help the user.
 
