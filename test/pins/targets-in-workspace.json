@@ -504,7 +504,7 @@
         "skill": {
           "state": "unsupported",
           "output": [],
-          "note": "through agent-skills: OpenCode reads .agents/skills/, written by the agent-skills target"
+          "note": "through agent-skills: OpenCode reads .agents/skills/, written by the agent-skills target (a folder skill is also read from .claude/skills/ when claude-code writes it)"
         },
         "mcp": {
           "state": "unsupported",

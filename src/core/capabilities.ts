@@ -1,6 +1,6 @@
 import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../schema/index.js";
 import type { Resolution, ResolvedIngredient } from "./resolve.js";
-import { appliesTo, effectiveTargets, EXAMPLE_SETTINGS } from "../emitters/shared.js";
+import { appliesTo, effectiveTargets, EXAMPLE_SETTINGS, flatSkills, outName } from "../emitters/shared.js";
 
 /* ------------------------------------------------------------------ */
 /* Capability states and the matrix (spec 16 §5.3)                     */
@@ -294,7 +294,7 @@ export const CAPABILITIES = {
     rule: { state: "unsupported", output: [], note: "through agents-md: OpenCode reads AGENTS.md, written by the agents-md target" },
     agent: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     command: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
-    skill: { state: "unsupported", output: [], note: "through agent-skills: OpenCode reads .agents/skills/, written by the agent-skills target" },
+    skill: { state: "unsupported", output: [], note: "through agent-skills: OpenCode reads .agents/skills/, written by the agent-skills target (a folder skill is also read from .claude/skills/ when claude-code writes it)" },
     mcp: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
     steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
@@ -365,7 +365,19 @@ void writtenIs;
  * target writes into a file this tool reads is warned unless that carrier is among the workspace's targets and the ingredient
  * is aimed at it. Not part of `targets --json`.
  */
-const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Target>> }> = {
+/**
+ * A carrier of a "through X" cell: a target, or a target that carries only some ingredients of the type (`only`) — `claude-code`
+ * carries a skill to OpenCode only in folder form, since a flat `.claude/skills/<name>.md` was not shown to be read (spec 63 §4).
+ */
+type Carrier = Target | { target: Target; only: (ing: ResolvedIngredient, resolution: Resolution) => boolean };
+
+/** `claude-code` as a skill carrier: a folder skill only — `flatSkills` is the one predicate for the flat ones it writes. */
+const FOLDER_SKILLS_OF_CLAUDE_CODE: Carrier = {
+  target: "claude-code",
+  only: (ing, resolution) => !flatSkills(resolution, resolution.targets).includes(outName(ing.meta)),
+};
+
+const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Carrier | readonly Carrier[]>> }> = {
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
@@ -374,7 +386,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; 
   "agent-skills": { label: "Agent Skills", per: "type" },
   codex: { label: "Codex", per: "type", carriers: { rule: "agents-md", command: "agent-skills", skill: "agent-skills" } },
   antigravity: { label: "Antigravity", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
-  opencode: { label: "OpenCode", per: "type", carriers: { rule: "agents-md", skill: "agent-skills" } },
+  opencode: { label: "OpenCode", per: "type", carriers: { rule: "agents-md", skill: ["agent-skills", FOLDER_SKILLS_OF_CLAUDE_CODE] } },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {
@@ -400,7 +412,13 @@ export function written<T extends Target>(
   // reaches the tool in X's file — nothing to say. An ingredient whose `targets` leave the carrier out is warned.
   const carried = (ing: ResolvedIngredient) => {
     const c = carriers?.[ing.meta.type];
-    return c !== undefined && resolution.targets.includes(c) && appliesTo(effectiveTargets(ing.meta, resolution), c);
+    if (c === undefined) return false;
+    const list: readonly Carrier[] = Array.isArray(c) ? c : [c as Carrier];
+    return list.some((one) => {
+      const t = typeof one === "string" ? one : one.target;
+      if (!resolution.targets.includes(t) || !appliesTo(effectiveTargets(ing.meta, resolution), t)) return false;
+      return typeof one === "string" || one.only(ing, resolution);
+    });
   };
   let started = false;
   let finished = false;
