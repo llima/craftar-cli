@@ -5,6 +5,7 @@ import path from "node:path";
 import { loadWorkspace, plan, type Plan } from "../src/core/sync.js";
 import { runCli } from "./helpers/cli.js";
 import { profile, recipe, rule, scenario, type ForgeSpec } from "./helpers/forge.js";
+import { skipResidue, withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
 
 /**
  * Spec 47 §5.2 / §11 item 8: a profile's `docs:` block changes no emitted byte. Written BEFORE any src/ change: it passes
@@ -51,7 +52,8 @@ describe("docs-block-pins — a profile's docs: block changes no planned byte (s
   it("the plan without a block matches the pin", async () => {
     const { p } = await planned();
     const pin = JSON.parse(await fs.readFile(PIN, "utf8"));
-    expect({ files: hashes(p), warnings: p.warnings }).toEqual(pin);
+    expect(skipResidue(p.warnings, pin)).toEqual([]);
+    expect(withoutCoveredSkip({ files: hashes(p), warnings: p.warnings })).toEqual(withoutCoveredSkip(pin));
   });
 
   for (const [label, docs] of [
@@ -62,7 +64,8 @@ describe("docs-block-pins — a profile's docs: block changes no planned byte (s
     it(`${label}: the same paths, bytes and warnings as the pin`, async () => {
       const { p } = await planned(docs);
       const pin = JSON.parse(await fs.readFile(PIN, "utf8"));
-      expect({ files: hashes(p), warnings: p.warnings }).toEqual(pin);
+      expect(skipResidue(p.warnings, pin)).toEqual([]);
+      expect(withoutCoveredSkip({ files: hashes(p), warnings: p.warnings })).toEqual(withoutCoveredSkip(pin));
     });
   }
 

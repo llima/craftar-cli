@@ -390,7 +390,7 @@ describe("sections — the schema gate (Ruling 7, AC 14)", () => {
 });
 
 describe("plan warnings — the cross-target order of the skip warnings (spec 18 §9.2)", () => {
-  it("the ten lines of spec 18 §2, in order, for claude-code, kiro and agents-md", async () => {
+  it("the lines of spec 18 §2, in order, for claude-code, kiro and agents-md — agents-md silent where another target writes the ingredient", async () => {
     const agent = (name: string, tools: string[]): IngredientSpec => ({
       meta: { type: "agent", name, targets: "*", tools },
       files: { "agent.md": `# ${name}\n` },
@@ -419,11 +419,7 @@ describe("plan warnings — the cross-target order of the skip warnings (spec 18
       "kiro: script script/s has no Kiro equivalent — skipped",
       'kiro: tool "TodoWrite" has no Kiro equivalent; dropped',
       "kiro: hook hook/h has no Kiro equivalent — skipped",
-      "agents-md: 2 agent ingredient(s) have no AGENTS.md equivalent — skipped: agent/a, agent/b",
-      "agents-md: 1 script ingredient(s) have no AGENTS.md equivalent — skipped: script/s",
-      "agents-md: 1 hook ingredient(s) have no AGENTS.md equivalent — skipped: hook/h",
-      "agents-md: 1 steering ingredient(s) have no AGENTS.md equivalent — skipped: steering/st",
-      "agents-md: 1 mcp ingredient(s) have no AGENTS.md equivalent — skipped: mcp/m",
+      // no agents-md line: claude-code writes the agents, the script, the hook and the MCP server, and kiro the steering
     ]);
   });
 });

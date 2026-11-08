@@ -169,6 +169,24 @@ describe("opencode MCP (spec 63 §8)", () => {
     ]);
   });
 
+  it("7b. a remote server's headers that is not an object is dropped with a warning naming the server only; {} and null are not", T, async () => {
+    const p = await planOf(
+      await ws(["opencode"], [
+        mcp("strhdr", { type: "http", url: "https://a.acme.test/mcp", headers: "Bearer acme-secret-value" }),
+        mcp("listhdr", { type: "http", url: "https://b.acme.test/mcp", headers: ["x"] }),
+        mcp("emptyhdr", { type: "http", url: "https://c.acme.test/mcp", headers: {} }),
+        mcp("nullhdr", { type: "http", url: "https://d.acme.test/mcp", headers: null }),
+      ]),
+    );
+    const servers = JSON.parse(fileOf(p, ".opencode/opencode.json")!).mcp.servers;
+    for (const k of ["strhdr", "listhdr", "emptyhdr", "nullhdr"]) expect(servers[k].headers).toBeUndefined();
+    expect(ow(p)).toEqual([
+      'opencode: MCP server "strhdr": headers is not an object; dropped',
+      'opencode: MCP server "listhdr": headers is not an object; dropped',
+    ]);
+    expect(p.warnings.join("\n")).not.toContain("acme-secret-value");
+  });
+
   it("8. a hand-written .opencode/opencode.json before the first sync is a collision; once removed, sync writes it at lock schema 7", T, async () => {
     const s = await ws(["opencode"], [mcp("tracker", { command: "npx" }), agent({})]);
     await fs.mkdir(path.join(s.wsRoot, ".opencode"), { recursive: true });

@@ -126,6 +126,12 @@ and generated into each workspace by \`craftar sync\`.
 - \`recipes/<name>.yaml\` — a recipe lists ingredients (\`ingredients: [rule/<name>, …]\`).
 - \`profiles/<name>/profile.yaml\` — a profile picks recipes and targets for a client or a team; \`${profile}\` is the first.
 
+## Where this Forge lives
+
+Keep this Forge out of a workspace's git repository. craftar allows a Forge in a directory inside another repository (a nested
+repository), but there it is easy to commit the Forge by mistake as part of the workspace: put it beside your workspaces, in a
+repository of its own, and point each workspace's \`craftar.yaml\` at it.
+
 ## Adding a rule
 
 1. Create \`ingredients/rules/<name>/ingredient.yaml\` (\`type: rule\`, \`name: <name>\`) and \`rule.md\` beside it.

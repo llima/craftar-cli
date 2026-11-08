@@ -7,6 +7,7 @@ import { acmeSections } from "./helpers/target-sections.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import type { Scenario } from "./helpers/forge.js";
 import { atLeastWin32 } from "./helpers/timeouts.js";
+import { skipResidue, withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
 
 // No test here runs Docker: doctor's child gets a PATH that holds only an empty temp dir, so `docker` is never found.
 let EMPTY_DIR: string;
@@ -225,7 +226,8 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
 
     // Compare mode: load the pin and compare
     const expected = await loadPin();
-    expect(withoutMachine(observed)).toEqual(withoutMachine(expected));
+    expect(skipResidue(observed, expected)).toEqual([]);
+    expect(withoutCoveredSkip(withoutMachine(observed))).toEqual(withoutCoveredSkip(withoutMachine(expected)));
   });
 
   it("the pin is not vacuous: holds section defaults, profile values, services, and a LF kiro steering file", { timeout: atLeastWin32(120_000) }, async () => {
@@ -341,7 +343,8 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
 
     // Compare with the same pin as schema 5 — they must be identical
     const expected = await loadPin();
-    expect(withoutMachine(observed)).toEqual(withoutMachine(expected));
+    expect(skipResidue(observed, expected)).toEqual([]);
+    expect(withoutCoveredSkip(withoutMachine(observed))).toEqual(withoutCoveredSkip(withoutMachine(expected)));
   });
 
   it("explain TEXT output at schema 6 with no targets= — pin for a rule's file and AGENTS.md", { timeout: atLeastWin32(120_000) }, async () => {

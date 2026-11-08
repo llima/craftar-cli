@@ -27,6 +27,7 @@ import {
   copyForgeForProof,
   removeProofCopy,
   scratchWriteRefusal,
+  parseYaml,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type OverrideConflict, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, LIST_PARAM_REASON, unmanaged } from "../core/drift.js";
@@ -78,7 +79,7 @@ import { errorText } from "../core/schema-fault.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
-import { isLegacyOwner, stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
+import { isLegacyOwner, stripForgeOnlyKeys, RecipeWrittenSchema, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
 import { deepMerge } from "../core/merge.js";
 import type { Sections } from "../schema/index.js";
 
@@ -177,6 +178,27 @@ export interface PromotePlan {
   ingredientRef: string;
   /** True when the workspace's Forge is a URL (tells CLI to say "push the Forge"). */
   isUrlForge: boolean;
+}
+
+/**
+ * Repoint a recipe of the promoting profile's own folder from the base to the new variant, in place (`editYamlText`, only
+ * `ingredients`), after `gitUnheld` holds the file, and read back through `RecipeWrittenSchema` as exactly that change.
+ */
+async function repointLocalRecipe(o: { forgeDir: string; realForgeDir: string; stage: ForgeStage; file: string; from: string; to: string }): Promise<void> {
+  const abs = path.join(o.forgeDir, ...o.file.split("/"));
+  const unheld = await gitUnheld(o.forgeDir, [abs]);
+  if (unheld.length > 0) throw new UnheldError(o.realForgeDir, unheld);
+  const raw = await o.stage.readText(abs);
+  const content = editYamlText(raw, { command: "drift promote", label: o.file, keys: ["ingredients"] }, (doc) => {
+    const seq = doc.get("ingredients", true);
+    if (!YAML.isSeq(seq)) return;
+    for (const item of seq.items) if (YAML.isScalar(item) && item.value === o.from) item.value = o.to;
+  });
+  const before = parseYaml(abs, raw, RecipeWrittenSchema, o.file);
+  const after = parseYaml(abs, content, RecipeWrittenSchema, o.file);
+  const wanted = { ...before, ingredients: before.ingredients.map((i) => (i === o.from ? o.to : i)) };
+  if (!isDeepStrictEqual(after, wanted)) throw new Error(`drift promote: ${o.file} does not read back as the repointed recipe — the Forge was left untouched`);
+  o.stage.write(abs, content);
 }
 
 /** D1–D17 messages. */
@@ -942,11 +964,18 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     flattenedSections = baseSectionNames;
   }
 
-  // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it — and, spec 54
-  // §5.12, a local recipe of a profile it extends, which no command writes.
+  // Spec 54 §5.12: a new variant would leave a local recipe of a profile this one extends naming the base beside it, and no
+  // command writes a parent. A local recipe of this profile that cites the base is repointed in Step 6 (the user's ruling of
+  // 2026-11-08, spec 51 §4.5 as amended); one that reaches it only through `extends` follows the root recipe's rules there.
   if (outcome === "variant") {
-    const citers = localCiters(forge, [X.ref], { profile, viaExtends: true });
-    if (citers.length) throw new Error(`${normalized}: ${citers.map((c) => c.file).join(", ")} reaches ${X.ref}, local to this profile — promote does not edit a local recipe; edit the Forge by hand`);
+    // A local recipe of this profile that cites the base but that this workspace does not resolve (its `recipes.remove`, or a
+    // recipe nothing applies) is outside X.via, so Step 6 would not repoint it and it would keep naming the base beside the
+    // variant for every other workspace of this profile: refused, as before the ruling.
+    // Through `extends` too: a local recipe this workspace removes that extends a root recipe citing the base would bring the
+    // base back beside the variant in every other workspace of this profile. One this workspace resolves is Step 6's (a repoint,
+    // or D17 through `extendedByOther`).
+    const unreached = localCiters(forge, [X.ref], { profile, viaExtends: true }).filter((c) => !p0.resolution.recipes.includes(c.recipe));
+    if (unreached.length) throw new Error(`${normalized}: ${unreached.map((c) => c.file).join(", ")} reaches ${X.ref} but this workspace does not resolve it — promote would leave it naming the base beside the variant; edit the Forge by hand`);
     for (const parent of familyOf(forge, profile).slice(1)) {
       const up = localCiters(forge, [X.ref], { profile: parent, viaExtends: true });
       if (up.length) throw new Error(`${normalized}: ${up.map((c) => c.file).join(", ")} reaches ${X.ref}, local to ${parent}, which ${profile} extends — no command writes a parent: edit the Forge by hand`);
@@ -1178,9 +1207,47 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Build a map of recipes the profile's integrations block selects: recipe → slot
   const selectedBy = new Map(effectiveProfile(forge, profileObj).selected.map((s) => [s.recipe, s.slot]));
 
+  // Spec 54 §5.9: a recipe a parent reaches — written in its list, selected by its integrations block, or extended from
+  // either — is the family's: every case would edit it or the parent's list, and no command writes a parent. The child
+  // listing it too, or a workspace adding it, changes nothing about what the parent brings. Decided before the cases, so
+  // a parent with one child is refused too; a parent whose recipes do not resolve fails closed.
+  const refuseViaParent = (R: string, local = false): void => {
+    const view = forgeFor(forge, profile);
+    const viaParent = familyOf(forge, profile).slice(1).find((q) => {
+      try {
+        return recipeOrder(view, effectiveProfile(forge, forge.profiles.get(q)!).recipes, `profile ${q}`).includes(R);
+      } catch (e) {
+        throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
+      }
+    });
+    if (viaParent === undefined) return;
+    // A recipe of this profile's own folder that a parent lists by name: the repoint would edit this profile's file only,
+    // but the parent's list is the family's, and no command writes a parent.
+    if (local) throw new Error(`${normalized}: recipe ${R} is local to ${profile}, and profile ${viaParent}, which it extends, lists it — no command writes a parent: edit the Forge by hand`);
+    throw new Error(D17_PARENT(normalized, R, viaParent, profile));
+  };
+
   if (outcome === "variant") {
     // Check which recipes need to be edited or forked
     for (const R of viaRecipes) {
+      // A recipe in this profile's own folder (spec 51) is seen by this profile alone — a concrete profile is never extended
+      // (spec 54 E2) — so it is edited in place, like Case 1 below, behind the same gate and the same proof.
+      const ownLocal = forge.locals.get(profile)?.recipes.get(R);
+      if (ownLocal) {
+        refuseViaParent(R, true);
+        // Only one the profile itself resolves (its list, its block, their `extends`): one a workspace brings in (`recipes.add`,
+        // or the `extends` of a recipe it adds) is refused as the root's is (D17). A profile that does not resolve on its own
+        // cannot say, so it is refused too (fail closed).
+        const own = resolvedRecipes(forge, profile);
+        if (own === null) throw new Error(`${normalized}: profile ${profile} does not resolve on its own, so promote cannot tell whether ${R} is its own recipe — fix the profile, or edit the Forge by hand`);
+        if (!own.has(R)) {
+          const chain = (ws.config.recipes?.add ?? []).includes(R) ? "recipes.add (craftar.yaml)" : (findExtendsChain(forgeFor(forge, profile), p0.resolution.recipes, R) ?? R);
+          throw new Error(D17(R, chain));
+        }
+        await repointLocalRecipe({ forgeDir, realForgeDir, stage, file: ownLocal.file, from: refToReplace, to: variantRef });
+        editedKeys.set(ownLocal.file, ["ingredients"]);
+        continue;
+      }
       // Check if this profile owns the recipe (resolves it in its own layer)
       const profileOwns = recipesOf(forge, profile).has(R);
       // Check if any other profile resolves it, and record the first profile that does not resolve at all
@@ -1217,21 +1284,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // Check if any other resolved recipe extends R
       const extendedByOther = isExtendedByOtherResolved(forgeFor(forge, profile), p0.resolution.recipes, R);
 
-      // Spec 54 §5.9: a recipe a parent reaches — written in its list, selected by its integrations block, or extended from
-      // either — is the family's: every case would edit it or the parent's list, and no command writes a parent. The child
-      // listing it too, or a workspace adding it, changes nothing about what the parent brings. Decided before the cases, so
-      // a parent with one child is refused too; a parent whose recipes do not resolve fails closed.
-      {
-        const view = forgeFor(forge, profile);
-        const viaParent = familyOf(forge, profile).slice(1).find((q) => {
-          try {
-            return recipeOrder(view, effectiveProfile(forge, forge.profiles.get(q)!).recipes, `profile ${q}`).includes(R);
-          } catch (e) {
-            throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
-          }
-        });
-        if (viaParent !== undefined) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
-      }
+      // Spec 54 §5.9: decided before the cases (the own-local branch above asks it first too).
+      refuseViaParent(R);
 
       if (profileOwns && !othersMay) {
         // Case 1: profile owns it alone — edit recipe in place
