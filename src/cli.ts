@@ -771,7 +771,7 @@ async function setupCommand(o: SetupOptions): Promise<void> {
   const targets = o.targets === undefined ? undefined : parseTargets(o.targets);
   // The given flags are checked first, in either mode (S1, S5, S11).
   try {
-    checkSetupFlags({ forgeDir: o.forgeDir ?? ".", name: o.name, profile: o.profile ?? "x", targets, workspaces: o.workspace, import: o.import }, process.platform);
+    checkSetupFlags({ forgeDir: o.forgeDir, name: o.name, profile: o.profile ?? "x", targets, workspaces: o.workspace, import: o.import }, process.platform);
   } catch (e) {
     fail(errorText(e));
   }
@@ -873,11 +873,17 @@ async function runSetup(s: SetupRun): Promise<boolean> {
   // Step 5: each workspace through init's core, stopping at the first that is not started.
   const started: string[] = [];
   for (const w of s.workspaces) {
-    if (!(await startSetupWorkspace(w, s.forgeAbs, s.profile, s.sync))) {
+    const outcome = await startSetupWorkspace(w, s.forgeAbs, s.profile, s.sync);
+    if (outcome !== "started") {
       const rest = s.workspaces.slice(started.length + 1);
-      errorLine(
-        `setup created the Forge${started.length ? ` and started ${started.join(", ")}` : ""}; ${w} was not started${rest.length ? `, nor ${rest.join(", ")}` : ""} — fix the cause and run craftar init --forge ${shellQuote(s.forgeAbs, process.platform)} --profile ${s.profile} in each`,
-      );
+      const init = `craftar init --forge ${shellQuote(s.forgeAbs, process.platform)} --profile ${s.profile}`;
+      const done = started.length ? ` and started ${started.join(", ")}` : "";
+      const here =
+        outcome === "refused"
+          ? `${w} has its craftar.yaml but its first sync was refused — fix the cause above, then run craftar sync there`
+          : `${w} was not started — fix the cause and run ${init} there`;
+      const after = rest.length ? `; not started: ${rest.join(", ")} — run ${init} in each` : "";
+      errorLine(`setup created the Forge${done}; ${here}${after}`);
       return false;
     }
     started.push(w);
@@ -900,22 +906,23 @@ function printImportSummary(r: ImportReport, ws: string, forge: string): void {
 
 /**
  * Step 5: one workspace through `planInit`, `craftar.yaml` `wx` (N1's words when it appeared) and `reportStartedWorkspace` —
- * `init`'s flags form, no clone. False when it was not started or its first sync was refused.
+ * `init`'s flags form, no clone. `not-started` when no `craftar.yaml` was written, `refused` when it was but the first sync was
+ * refused.
  */
-async function startSetupWorkspace(root: string, forgeAbs: string, profile: string, sync: boolean): Promise<boolean> {
+async function startSetupWorkspace(root: string, forgeAbs: string, profile: string, sync: boolean): Promise<"started" | "refused" | "not-started"> {
   let init: InitPlan;
   try {
     init = await planInit(root, { forge: forgeAbs, profile }, { ...load({}, "sync"), local: { doc: null, keys: [] } });
   } catch (e) {
     errorLine(`${root}: ${errorText(e)}`);
-    return false;
+    return "not-started";
   }
   const file = path.join(root, WORKSPACE_FILE);
   try {
     await fs.mkdir(root, { recursive: true });
   } catch (e) {
     errorLine(`${root}: ${errorText(e)}`);
-    return false;
+    return "not-started";
   }
   try {
     await fs.writeFile(file, init.text, { flag: "wx" });
@@ -925,10 +932,10 @@ async function startSetupWorkspace(root: string, forgeAbs: string, profile: stri
         ? `${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`
         : `${root}: ${errorText(e)}`,
     );
-    return false;
+    return "not-started";
   }
   const outcome = await reportStartedWorkspace(root, init, init.notes, { sync });
-  return outcome.kind !== "refused";
+  return outcome.kind === "refused" ? "refused" : "started";
 }
 
 /**

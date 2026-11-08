@@ -18,7 +18,8 @@ import { importClaudeCode, type ImportReport } from "../importers/claude-code.js
 
 /** What the flags (or the answers) give, before anything is read (S1, S5, S11). */
 export interface SetupFlags {
-  forgeDir: string;
+  /** Absent in the interactive mode before Q2 is answered: nothing to check yet. */
+  forgeDir?: string;
   name?: string;
   profile: string;
   targets?: string[];
@@ -39,7 +40,7 @@ export function checkSetupFlags(f: SetupFlags, platform: NodeJS.Platform): void 
       throw new Error(`--name: ${(e as Error).message.replace("is not a profile name", "is not a Forge name")}`);
     }
   }
-  if (platform === "win32" && /["%]/.test(path.resolve(f.forgeDir))) throw new Error('--forge-dir cannot hold " or % on Windows — pick another directory');
+  if (f.forgeDir !== undefined && platform === "win32" && /["%]/.test(path.resolve(f.forgeDir))) throw new Error('--forge-dir cannot hold " or % on Windows — pick another directory');
   if (f.targets !== undefined) {
     if (f.import === true) throw new Error("--targets cannot be combined with --import — import takes the targets it detects (claude-code, kiro); add others to the profile afterwards");
     if (f.targets.length === 0) throw new Error(`--targets needs at least one target (${TARGETS.join(", ")})`);
@@ -123,11 +124,24 @@ export async function checkGitIdentity(env: NodeJS.ProcessEnv): Promise<void> {
       try {
         await execProgram("git", [...gitRead(dir), "var", v], { env: isolated });
       } catch {
+        // An identity a conditional include gives (`includeIf "gitdir:…"`) applies only inside the matching repository, which does
+        // not exist yet: then the commit decides, through the late-failure path, rather than refusing a working setup.
+        if (await hasConditionalInclude(dir, isolated)) return;
         throw new Error(GIT_NEEDED);
       }
     }
   } finally {
     await removeProofCopy(dir);
+  }
+}
+
+/** Whether the configuration git reads outside any repository holds an `includeIf.*` rule (a conditional identity, S6). */
+async function hasConditionalInclude(dir: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  try {
+    const { stdout } = await execProgram("git", [...gitRead(dir), "config", "--name-only", "--get-regexp", "^includeif\\."], { env });
+    return stdout.trim() !== "";
+  } catch {
+    return false;
   }
 }
 

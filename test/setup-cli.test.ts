@@ -30,7 +30,11 @@ async function sandbox() {
   const root = await fs.realpath(await tmpDir("craftar-setup-cli-"));
   cleanups.push(() => removeWithRetry(root));
   const home = path.join(root, "home");
-  const run = (args: string[], env: NodeJS.ProcessEnv = {}) => runCli(args, { cwd: root, env: { CRAFTAR_HOME: home, ...IDENTITY, ...env } });
+  // A temporary directory of the test's own for the child, so its scratch directories never meet another test's.
+  const tmp = await fs.realpath(await tmpDir("craftar-setup-cli-tmp-"));
+  cleanups.push(() => removeWithRetry(tmp));
+  const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
+    runCli(args, { cwd: root, env: { CRAFTAR_HOME: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp, ...IDENTITY, ...env } });
   return { root, home, run };
 }
 
@@ -305,5 +309,34 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("craft
     expect(r.stdout).not.toContain("next: edit the Forge");
     await fs.access(path.join(root, "w1/craftar.lock"));
     expect(git(path.join(root, "f"), "rev-list", "--count", "HEAD").out).toBe("1");
+  }, T);
+
+  it("a workspace whose first sync is refused is named as started-but-refused, and the next ones as not started", async () => {
+    const { root, run } = await sandbox();
+    await fs.mkdir(path.join(root, "outside"));
+    await fs.mkdir(path.join(root, "ws"));
+    await fs.symlink(path.join(root, "outside"), path.join(root, "ws/.claude"));
+    const r = run(["setup", "--forge-dir", "f", "--profile", "acme", "--workspace", "ws", "--workspace", "ws2"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/ws has its craftar.yaml but its first sync was refused — fix the cause above, then run craftar sync there; not started: .*ws2 — run craftar init --forge/);
+    await fs.access(path.join(root, "ws/craftar.yaml"));
+    await expect(fs.access(path.join(root, "ws2"))).rejects.toThrow();
+  }, T);
+
+  it("S6 lets an identity a conditional include gives pass, and the commit carries it", async () => {
+    const { root, run } = await sandbox();
+    await writeFiles(root, {
+      "work.inc": "[user]\n\tname = Acme Dev\n\temail = dev@acme.test\n",
+      "gitconfig": `[user]\n\tuseConfigOnly = true\n[includeIf "gitdir:${root}/work/"]\n\tpath = ${path.join(root, "work.inc")}\n`,
+    });
+    await fs.mkdir(path.join(root, "work"));
+    const r = run(["setup", "--forge-dir", "work/f", "--profile", "acme"], {
+      GIT_CONFIG_GLOBAL: path.join(root, "gitconfig"),
+      GIT_AUTHOR_NAME: undefined, GIT_AUTHOR_EMAIL: undefined, GIT_COMMITTER_NAME: undefined, GIT_COMMITTER_EMAIL: undefined, EMAIL: undefined,
+    });
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(0);
+    const author = spawnSync("git", ["log", "-1", "--format=%an <%ae>"], { cwd: path.join(root, "work/f"), encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(root, "gitconfig") } });
+    expect(author.stdout.trim()).toBe("Acme Dev <dev@acme.test>");
   }, T);
 });
