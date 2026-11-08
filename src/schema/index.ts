@@ -37,8 +37,9 @@ function noProtoKey<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
  * Spec 61 slice 2: `codex` and `antigravity` at Forge schema 16 (its plan's G1, ruled 2026-11-06).
  * Spec 61 slice 3 added `gemini` at Forge schema 17 in 1.3.0; 1.4.0 removed it (the user's ruling of 2026-11-07, a dated exception
  * to the 1.x promise, README *Compatibility*): see `REMOVED_TARGET`.
+ * Spec 63: `opencode` at Forge schema 18 (`FORGE_SCHEMA_OPENCODE`), lock schema 7.
  */
-export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot", "agent-skills", "codex", "antigravity"] as const;
+export const TARGETS = ["claude-code", "kiro", "agents-md", "cursor", "copilot", "agent-skills", "codex", "antigravity", "opencode"] as const;
 export type Target = (typeof TARGETS)[number];
 
 /**
@@ -89,6 +90,12 @@ export const SLICE_1_TARGETS = [...LEGACY_TARGETS, "cursor", "copilot", "agent-s
  * Lock schema 5 holds these alone, so a lock read as 5 still refuses a later target, and only schema 6 holds one.
  */
 export const SLICE_2_TARGETS = [...SLICE_1_TARGETS, "codex", "antigravity"] as const;
+
+/**
+ * The targets craftar 1.5.0 knew (spec 63 §10): slice 2's — the same names, since 1.4.0 removed `gemini`. Frozen: it never grows. Lock
+ * schema 6 holds these, `services` and the removed `gemini` alone, so a lock read as 6 still refuses `opencode`, and only schema 7 holds it.
+ */
+export const LOCK_6_TARGETS = SLICE_2_TARGETS;
 
 /** Owners of lock entries: every AI-coder target plus `services`. */
 export const OWNERS = [...TARGETS, "services"] as const;
@@ -1076,6 +1083,8 @@ export const FORGE_SCHEMA_SLICE_2_TARGETS = 16;
  * user's ruling of 2026-11-07); a Forge that declares it still loads (README *Compatibility*).
  */
 export const FORGE_SCHEMA_GEMINI = 17;
+/** Forge schema 18 (spec 63 §10): a Forge file may name the `opencode` target. Every craftar before it refuses such a Forge at load. */
+export const FORGE_SCHEMA_OPENCODE = 18;
 
 export const ForgeManifestSchema = z.object({
   name: z.string(),
@@ -1098,6 +1107,7 @@ export const ForgeManifestSchema = z.object({
       z.literal(FORGE_SCHEMA_NATIVE_TARGETS),
       z.literal(FORGE_SCHEMA_SLICE_2_TARGETS),
       z.literal(FORGE_SCHEMA_GEMINI),
+      z.literal(FORGE_SCHEMA_OPENCODE),
     ])
     .default(1),
   description: z.string().optional(),
@@ -1229,7 +1239,7 @@ export const LockSchemaV5 = LockSchemaV4.extend({
  * Lock entry for schema 6 (spec 61 slice 3, G2): any owner (`OwnerSchema`), or `gemini` (`REMOVED_TARGET`) — a 1.3.x lock still
  * reads, and the entry becomes an orphan since nothing plans it (1.4.0).
  */
-export const LockEntrySchemaV6 = LockEntrySchemaV4.extend({ target: z.enum([...OWNERS, REMOVED_TARGET]) });
+export const LockEntrySchemaV6 = LockEntrySchemaV4.extend({ target: z.enum([...LOCK_6_TARGETS, "services", REMOVED_TARGET]) });
 /**
  * Lock schema 6 (spec 61 slice 3, G2): written by 1.3.x when the lock's `targets` or one of its entries named `gemini`; every craftar
  * before 1.3.0 refuses it by name. Since 1.4.0 it is still read, and written only while a kept entry (a hand-edited orphan) names
@@ -1237,16 +1247,27 @@ export const LockEntrySchemaV6 = LockEntrySchemaV4.extend({ target: z.enum([...O
  */
 export const LockSchemaV6 = LockSchemaV4.extend({
   schema: z.literal(6),
-  targets: z.array(z.enum([...TARGETS, REMOVED_TARGET])),
+  targets: z.array(z.enum([...LOCK_6_TARGETS, REMOVED_TARGET])),
   files: z.array(LockEntrySchemaV6),
 });
+/** Lock entry for schema 7 (spec 63 §10): any owner, or the removed `gemini` a kept entry of an older lock may still name. */
+export const LockEntrySchemaV7 = LockEntrySchemaV4.extend({ target: z.enum([...OWNERS, REMOVED_TARGET]) });
+/**
+ * Lock schema 7 (spec 63 §10): written exactly when the lock's `targets` or one of its entries names `opencode`. Every craftar before
+ * it refuses it by name.
+ */
+export const LockSchemaV7 = LockSchemaV4.extend({
+  schema: z.literal(7),
+  targets: z.array(z.enum([...TARGETS, REMOVED_TARGET])),
+  files: z.array(LockEntrySchemaV7),
+});
 /** Supported lock schemas; anything else is refused by name in `readLock`. */
-export const LOCK_SCHEMAS: readonly unknown[] = [1, 2, 3, 4, 5, 6];
+export const LOCK_SCHEMAS: readonly unknown[] = [1, 2, 3, 4, 5, 6, 7];
 // A lock with no `schema` key is version 1, as `.default(1)` read it before. A discriminated union
 // rejects a missing discriminator, so the key is supplied before the union sees it.
 export const LockSchema = z.preprocess(
   (v) => (v !== null && typeof v === "object" && !Array.isArray(v) && !Object.hasOwn(v, "schema") ? { ...v, schema: 1 } : v),
-  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2, LockSchemaV3, LockSchemaV4, LockSchemaV5, LockSchemaV6]),
+  z.discriminatedUnion("schema", [LockSchemaV1, LockSchemaV2, LockSchemaV3, LockSchemaV4, LockSchemaV5, LockSchemaV6, LockSchemaV7]),
 );
 export type Lock = z.infer<typeof LockSchema>;
 export type LockV2 = z.infer<typeof LockSchemaV2>;
@@ -1254,11 +1275,13 @@ export type LockV3 = z.infer<typeof LockSchemaV3>;
 export type LockV4 = z.infer<typeof LockSchemaV4>;
 export type LockV5 = z.infer<typeof LockSchemaV5>;
 export type LockV6 = z.infer<typeof LockSchemaV6>;
+export type LockV7 = z.infer<typeof LockSchemaV7>;
 export type LockEntry = z.infer<typeof LockEntrySchema>;
 export type LockEntryV3 = z.infer<typeof LockEntrySchemaV3>;
 export type LockEntryV4 = z.infer<typeof LockEntrySchemaV4>;
 export type LockEntryV5 = z.infer<typeof LockEntrySchemaV5>;
 export type LockEntryV6 = z.infer<typeof LockEntrySchemaV6>;
+export type LockEntryV7 = z.infer<typeof LockEntrySchemaV7>;
 
 /* ------------------------------------------------------------------ */
 /* Workspace registry — $CRAFTAR_HOME/registry.json (spec 21 §5.2)      */

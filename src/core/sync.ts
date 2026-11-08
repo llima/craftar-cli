@@ -16,7 +16,7 @@ import { deepMerge } from "./merge.js";
 import { canonicalValue, checkDeclaredOnce, expandSections, firstMarkerLine, markerLine, parseSections, projectSections, readsTargetSections, type ParsedSections } from "./sections.js";
 import { placeholders, bodyFile, emittedFile, shellAtGate } from "./extract.js";
 import { metadataCitations, metadataFileClash, renderedMeta } from "./metadata-params.js";
-import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockEntryV5, type LockEntryV6, type LockV2, type LockV3, type LockV4, type LockV5, type LockV6, type LockOwner, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyOwner, REMOVED_TARGET } from "../schema/index.js";
+import { LOCK_SCHEMAS, LockSchema, WorkspaceConfigSchema, type Lock, type LockEntry, type LockEntryV3, type LockEntryV4, type LockEntryV5, type LockEntryV6, type LockEntryV7, type LockV2, type LockV3, type LockV4, type LockV5, type LockV6, type LockV7, type LockOwner, type Owner, type Target, type LegacyTarget, type WorkspaceConfig, isLegacyOwner, REMOVED_TARGET } from "../schema/index.js";
 import { SchemaError, shownSchema } from "./schema-fault.js";
 import { claudeCode } from "../emitters/claude-code.js";
 import { kiro } from "../emitters/kiro.js";
@@ -26,6 +26,7 @@ import { copilot } from "../emitters/copilot.js";
 import { agentSkills } from "../emitters/agent-skills.js";
 import { codex } from "../emitters/codex.js";
 import { antigravity } from "../emitters/antigravity.js";
+import { opencode } from "../emitters/opencode.js";
 import type { EmitBase, Emitter, PlannedFile } from "../emitters/types.js";
 import { CAPABILITIES, written } from "./capabilities.js";
 import { planServices } from "./services.js";
@@ -45,7 +46,7 @@ export { AGENTS_MD_BUDGET_KEY };
 export const AGENTS_MD_DEFAULT_MAX_BYTES = 32768;
 
 // Mapped, not Record<Target, Emitter>: an emitter in another target's slot does not compile (spec 18 §3.3).
-const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor, copilot, "agent-skills": agentSkills, codex, antigravity };
+const EMITTERS: { [T in Target]: Emitter<T> } = { "claude-code": claudeCode, kiro, "agents-md": agentsMd, cursor, copilot, "agent-skills": agentSkills, codex, antigravity, opencode };
 
 /**
  * Runs one target's emitter on the walk of what the matrix says it writes. The walk warns about the
@@ -1391,7 +1392,7 @@ export interface FileStatus {
   target?: LockOwner;
   ingredient?: string;
   planned?: PlannedFile;
-  lock?: LockEntry | LockEntryV3 | LockEntryV4 | LockEntryV5 | LockEntryV6;
+  lock?: LockEntry | LockEntryV3 | LockEntryV4 | LockEntryV5 | LockEntryV6 | LockEntryV7;
   /** Set only on a row whose path escapes the workspace (spec 48 §4.3); `statusReport` drops it, so it reaches no `--json`. */
   escapes?: Escape;
   /** `hashNormalized` of the bytes `status()` read at this path; null when nothing was read (absent, not a regular file, or a path that escapes). */
@@ -1401,7 +1402,7 @@ export interface FileStatus {
 }
 
 /** Does the disk content match the lock entry? Recognises both current and pre-0.17.4 hashes for non-UTF-8 files. */
-function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3 | LockEntryV4 | LockEntryV5 | LockEntryV6): boolean {
+function matchesLock(disk: Buffer, entry: LockEntry | LockEntryV3 | LockEntryV4 | LockEntryV5 | LockEntryV6 | LockEntryV7): boolean {
   return hashNormalized(disk) === entry.hash || (!isUtf8(disk) && legacyHash(disk) === entry.hash);
 }
 
@@ -1497,7 +1498,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   const written: string[] = [];
   const removed: string[] = [];
   const skipped: FileStatus[] = [];
-  const entries: LockEntryV6[] = [];
+  const entries: LockEntryV7[] = [];
 
   // Compute once, used per row for escape checks with a fresh cache each time.
   const root = await containRoot(ws.root);
@@ -1599,6 +1600,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
 
   // Lock schema selection (spec 31 §5.2, spec 61 §7, slice 2's G1): the highest schema the lock's targets and its entries need
   // (`lockSchemaFor`) — kept entries from a previous lock included, even when no file is emitted for them:
+  // - 7 when one names opencode (spec 63);
   // - 6 when a kept entry of a 1.3.x lock names gemini (removed in 1.4.0);
   // - 5 when one names a slice-2 target (codex, antigravity);
   // - 4 when one names a slice-1 target (cursor, copilot, agent-skills);
@@ -1614,12 +1616,15 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
     targets: p.resolution.targets,
     generatedAt: new Date().toISOString(),
   };
-  // The narrowing casts are sound: `schema` is the highest lockSchemaFor of every target and entry target, so below 5 none is a
+  // The narrowing casts are sound: `schema` is the highest lockSchemaFor of every target and entry target, so below 7 none is
+  // `opencode` (6: 1.5.0's owners and the removed gemini), below 5 none is a
   // later target (4: slice-1 owners only), below 4 none is a slice-1 target (3: legacy owners and services), and at 2 none is
   // `services` either.
-  const built: LockV2 | LockV3 | LockV4 | LockV5 | LockV6 =
-    schema === 6
-      ? { schema: 6, ...base, files: sortedEntries }
+  const built: LockV2 | LockV3 | LockV4 | LockV5 | LockV6 | LockV7 =
+    schema === 7
+      ? { schema: 7, ...base, files: sortedEntries }
+      : schema === 6
+      ? { schema: 6, ...base, targets: base.targets as LockV6["targets"], files: sortedEntries as LockEntryV6[] }
       : schema === 5
       ? { schema: 5, ...base, targets: base.targets as LockV5["targets"], files: sortedEntries as LockEntryV5[] }
       : schema === 4
@@ -1636,7 +1641,7 @@ export async function apply(ws: Workspace, p: Plan, statuses: FileStatus[], opts
   return { written, removed, skipped, lock };
 }
 
-function entry(f: PlannedFile): LockEntryV6 {
+function entry(f: PlannedFile): LockEntryV7 {
   return { path: f.path, hash: hashNormalized(f.content), target: f.target, ingredient: f.ingredient };
 }
 

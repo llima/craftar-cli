@@ -1,6 +1,6 @@
 import { INGREDIENT_TYPES, TARGETS, type IngredientType, type Target } from "../schema/index.js";
 import type { Resolution, ResolvedIngredient } from "./resolve.js";
-import { appliesTo, effectiveTargets, EXAMPLE_SETTINGS } from "../emitters/shared.js";
+import { appliesTo, effectiveTargets, EXAMPLE_SETTINGS, flatSkills, outName } from "../emitters/shared.js";
 
 /* ------------------------------------------------------------------ */
 /* Capability states and the matrix (spec 16 §5.3)                     */
@@ -290,6 +290,29 @@ export const CAPABILITIES = {
     },
     service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
   },
+  opencode: {
+    rule: { state: "unsupported", output: [], note: "through agents-md: OpenCode reads AGENTS.md, written by the agents-md target" },
+    agent: {
+      state: "converted",
+      output: [".opencode/agents/<name>.md"],
+      note: "description, mode subagent and model (only in OpenCode's provider/model form); tools become OpenCode permissions — deny everything, then allow each tool the table maps, a tool or a scope it cannot map left denied with a warning; needs OpenCode 2 or later",
+    },
+    command: {
+      state: "converted",
+      output: [".opencode/commands/<name>.md"],
+      note: "description and the body, whose $ARGUMENTS OpenCode reads as Claude Code does; argument-hint and allowed-tools have no OpenCode field and are dropped with a warning",
+    },
+    skill: { state: "unsupported", output: [], note: "through agent-skills: OpenCode reads .agents/skills/, written by the agent-skills target (a folder skill is also read from .claude/skills/ when claude-code writes it)" },
+    mcp: {
+      state: "converted",
+      output: [".opencode/opencode.json"],
+      note: "a file of craftar's own holding only $schema and mcp.servers, which OpenCode merges after the root opencode.json: command and args become one command array, env becomes environment, ${NAME} becomes {env:NAME}; cwd, timeout, disabled and oauth kept, any other key dropped with a warning",
+    },
+    script: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    steering: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    hook: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+    service: { state: "unsupported", output: [], note: "skipped with a warning when aimed at this target" },
+  },
 } as const satisfies Record<Target, Record<IngredientType, Capability>>;
 
 /* ------------------------------------------------------------------ */
@@ -345,15 +368,28 @@ const writtenIs: [
   Equal<Written<"agent-skills">, "command" | "skill">,
   Equal<Written<"codex">, "agent" | "hook">,
   Equal<Written<"antigravity">, "rule" | "agent" | "mcp" | "hook">,
-] = [true, true, true, true, true, true, true, true];
+  Equal<Written<"opencode">, "agent" | "command" | "mcp">,
+] = [true, true, true, true, true, true, true, true, true];
 void writtenIs;
+
+/**
+ * A carrier of a "through X" cell: a target, or a target that carries only some ingredients of the type (`only`) — `claude-code`
+ * carries a skill to OpenCode only in folder form, since a flat `.claude/skills/<name>.md` was not shown to be read (spec 63 §4).
+ */
+type Carrier = Target | { target: Target; only: (ing: ResolvedIngredient, resolution: Resolution) => boolean };
+
+/** `claude-code` as a skill carrier: a folder skill only — `flatSkills` is the one predicate for the flat ones it writes. */
+const FOLDER_SKILLS_OF_CLAUDE_CODE: Carrier = {
+  target: "claude-code",
+  only: (ing, resolution) => !flatSkills(resolution, resolution.targets).includes(outName(ing.meta)),
+};
 
 /**
  * How a target words the warning for a type it does not write, and the "through X" cells (spec 61 §6.1): a type another
  * target writes into a file this tool reads is warned unless that carrier is among the workspace's targets and the ingredient
  * is aimed at it. Not part of `targets --json`.
  */
-const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Target>> }> = {
+const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Carrier | readonly Carrier[]>> }> = {
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
   "agents-md": { label: "AGENTS.md", per: "type" },
@@ -362,6 +398,7 @@ const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; 
   "agent-skills": { label: "Agent Skills", per: "type" },
   codex: { label: "Codex", per: "type", carriers: { rule: "agents-md", command: "agent-skills", skill: "agent-skills" } },
   antigravity: { label: "Antigravity", per: "type", carriers: { command: "agent-skills", skill: "agent-skills" } },
+  opencode: { label: "OpenCode", per: "type", carriers: { rule: "agents-md", skill: ["agent-skills", FOLDER_SKILLS_OF_CLAUDE_CODE] } },
 };
 
 export interface Walk<T extends Target> extends Iterable<WrittenIngredient<T>> {
@@ -387,7 +424,13 @@ export function written<T extends Target>(
   // reaches the tool in X's file — nothing to say. An ingredient whose `targets` leave the carrier out is warned.
   const carried = (ing: ResolvedIngredient) => {
     const c = carriers?.[ing.meta.type];
-    return c !== undefined && resolution.targets.includes(c) && appliesTo(effectiveTargets(ing.meta, resolution), c);
+    if (c === undefined) return false;
+    const list: readonly Carrier[] = Array.isArray(c) ? c : [c as Carrier];
+    return list.some((one) => {
+      const t = typeof one === "string" ? one : one.target;
+      if (!resolution.targets.includes(t) || !appliesTo(effectiveTargets(ing.meta, resolution), t)) return false;
+      return typeof one === "string" || one.only(ing, resolution);
+    });
   };
   let started = false;
   let finished = false;

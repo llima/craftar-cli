@@ -19,7 +19,7 @@ export function appliesTo(targets: "*" | string[], target: string): boolean {
  * agents-md, agent-skills and codex write no MCP file (their mcp cells are unsupported; codex's `.codex/config.toml` is shared, D5),
  * so they have no entries.
  */
-export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
+export const MCP_FILE = { "claude-code": ".mcp.json", kiro: ".kiro/settings/mcp.json", cursor: ".cursor/mcp.json", copilot: ".vscode/mcp.json", antigravity: ".agents/mcp_config.json", opencode: ".opencode/opencode.json" } as const satisfies Record<Exclude<Target, "agents-md" | "agent-skills" | "codex">, string>;
 
 /** The copilot target's second MCP file, for the Copilot CLI, which reads `.github/mcp.json` (or `.mcp.json`) and never `.vscode/mcp.json`. */
 export const COPILOT_CLI_MCP_FILE = ".github/mcp.json";
@@ -153,13 +153,13 @@ export function buildRuleLookup(ingredients: ResolvedIngredient[], resolution: T
 }
 
 /** The new targets' own modes (spec 61 §10): K1 is the file the citing target itself writes (codex writes none), then claude-code's, then AGENTS.md. */
-export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity";
+export type OwnMode = "cursor" | "copilot" | "codex" | "antigravity" | "opencode";
 /** Whose body a reference is resolved for: AGENTS.md (spec 15), kiro (spec 17), or a new target's own mode (spec 61 §10). */
 export type RefMode = "agents-md" | "kiro" | OwnMode;
 
 /** Whether a reference mode is a new target's own mode. */
 export function isOwnMode(mode: RefMode): mode is OwnMode {
-  return mode === "cursor" || mode === "copilot" || mode === "codex" || mode === "antigravity";
+  return mode === "cursor" || mode === "copilot" || mode === "codex" || mode === "antigravity" || mode === "opencode";
 }
 
 /**
@@ -167,7 +167,7 @@ export function isOwnMode(mode: RefMode): mode is OwnMode {
  * an always-on or a scoped one (it skips a manual or an auto rule), codex none (it reads AGENTS.md only).
  */
 function ownWrites(mode: OwnMode, meta: Ingredient): boolean {
-  if (meta.type !== "rule" || mode === "codex") return false;
+  if (meta.type !== "rule" || mode === "codex" || mode === "opencode") return false;
   return mode === "cursor" || mode === "antigravity" || meta.inclusion === "always" || meta.inclusion === "fileMatch";
 }
 
@@ -646,6 +646,8 @@ export function ruleFile(target: "claude-code" | "kiro" | OwnMode, m: { name: st
   if (target === "antigravity") return `.agents/rules/${outName(m)}.md`;
   // Codex writes no rule file (it reads AGENTS.md), so no state names one for it (ownWrites).
   if (target === "codex") throw new Error("internal: codex writes no rule file");
+  // Nor does OpenCode (it reads AGENTS.md; spec 63 §9).
+  if (target === "opencode") throw new Error("internal: opencode writes no rule file");
   // Copilot joins every always-on rule into one file (spec 61 §5.2)
   if (target === "copilot") return m.inclusion === "always" ? ".github/copilot-instructions.md" : `.github/instructions/${outName(m)}.instructions.md`;
   return target === "claude-code" ? `.claude/rules/${outName(m)}.md` : `.kiro/steering/${outName(m)}.md`;
@@ -1194,21 +1196,26 @@ const PREDEFINED = new Set(["workspaceFolder", "workspaceFolderBasename", "userH
 const ENV_REF = new RegExp(`\\$\\{(${ENV_NAME})\\}`, "g");
 
 /**
- * A deep copy whose string values have `${NAME}` replaced with `${env:NAME}` — except for Cursor's
- * predefined variables (`workspaceFolder`, `workspaceFolderBasename`, `userHome`, `pathSeparator`)
- * which are kept as written. Keys and non-string values are copied unchanged.
+ * A deep copy whose string values have `${NAME}` rewritten in the target's form — Cursor's `${env:NAME}` (the default) or OpenCode's
+ * `{env:NAME}` (spec 63 §8) — except for Cursor's predefined variables (`workspaceFolder`, `workspaceFolderBasename`, `userHome`,
+ * `pathSeparator`), kept as written; in the OpenCode form, which has none of them, each one kept is pushed to `left` so the emitter
+ * can warn. Keys and non-string values are copied unchanged; nothing else is touched.
  */
-export function envReferences(v: unknown): unknown {
+export function envReferences(v: unknown, form: "cursor" | "opencode" = "cursor", left?: string[]): unknown {
   if (typeof v === "string") {
     return v.replace(ENV_REF, (_match, name: string) => {
-      if (PREDEFINED.has(name)) return `\${${name}}`;
-      return `\${env:${name}}`;
+      if (PREDEFINED.has(name)) {
+        if (form === "opencode") left?.push(name);
+        return `\${${name}}`;
+      }
+      return form === "opencode" ? `{env:${name}}` : `\${env:${name}}`;
     });
   }
-  if (Array.isArray(v)) return v.map(envReferences);
+  // Written out, not `v.map(envReferences)`, which would pass the index as the form.
+  if (Array.isArray(v)) return v.map((x) => envReferences(x, form, left));
   if (v !== null && typeof v === "object") {
     const o: Record<string, unknown> = Object.create(null);
-    for (const [k, x] of Object.entries(v)) o[k] = envReferences(x);
+    for (const [k, x] of Object.entries(v)) o[k] = envReferences(x, form, left);
     return o;
   }
   return v;

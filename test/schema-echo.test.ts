@@ -31,7 +31,7 @@ const REFUSED: Record<string, { text: string; fault: string }> = {
   },
   "craftar.forge.yaml": {
     text: `name: test-forge\nschema: ${URL}\n`,
-    fault: "schema: Invalid input (Invalid literal value, expected 1 | Invalid literal value, expected 2 | Invalid literal value, expected 3 | Invalid literal value, expected 4 | Invalid literal value, expected 5 | Invalid literal value, expected 6 | Invalid literal value, expected 7 | Invalid literal value, expected 8 | Invalid literal value, expected 9 | Invalid literal value, expected 10 | Invalid literal value, expected 11 | Invalid literal value, expected 12 | Invalid literal value, expected 13 | Invalid literal value, expected 14 | Invalid literal value, expected 15 | Invalid literal value, expected 16 | Invalid literal value, expected 17)",
+    fault: "schema: Invalid input (Invalid literal value, expected 1 | Invalid literal value, expected 2 | Invalid literal value, expected 3 | Invalid literal value, expected 4 | Invalid literal value, expected 5 | Invalid literal value, expected 6 | Invalid literal value, expected 7 | Invalid literal value, expected 8 | Invalid literal value, expected 9 | Invalid literal value, expected 10 | Invalid literal value, expected 11 | Invalid literal value, expected 12 | Invalid literal value, expected 13 | Invalid literal value, expected 14 | Invalid literal value, expected 15 | Invalid literal value, expected 16 | Invalid literal value, expected 17 | Invalid literal value, expected 18)",
   },
 };
 
@@ -95,7 +95,7 @@ describe("a craftar.yaml the schema refuses, with a credential as the refused va
       const where = command.join(" ");
       expect(r.code, where).toBe(1);
       expect(r.stdout + r.stderr, where).not.toContain(M);
-      expect(r.stderr, where).toBe("error: invalid craftar.yaml: targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex' | 'antigravity'\n");
+      expect(r.stderr, where).toBe("error: invalid craftar.yaml: targets.0: Invalid enum value. Expected 'claude-code' | 'kiro' | 'agents-md' | 'cursor' | 'copilot' | 'agent-skills' | 'codex' | 'antigravity' | 'opencode'\n");
     }
     const d = runCli(["doctor", "--json", "--workspace", s.wsRoot]);
     expect(d.stdout + d.stderr).not.toContain(M);
@@ -153,10 +153,10 @@ describe("a craftar.lock that does not read", () => {
   it("a schema this craftar does not read: the number is printed, anything else is not", async () => {
     const s = await fresh();
     const file = path.join(s.wsRoot, "craftar.lock");
-    await fs.writeFile(file, JSON.stringify({ schema: 7 }) + "\n");
+    await fs.writeFile(file, JSON.stringify({ schema: 8 }) + "\n");
     const n = runCli(["status", "--workspace", s.wsRoot]);
     expect(n.code).toBe(1);
-    expect(n.stderr).toBe("error: craftar.lock declares schema 7, which this craftar does not read — upgrade craftar\n");
+    expect(n.stderr).toBe("error: craftar.lock declares schema 8, which this craftar does not read — upgrade craftar\n");
 
     await fs.writeFile(file, JSON.stringify({ schema: M }) + "\n");
     for (const command of [["status"], ["sync"], ["diff"]]) {
