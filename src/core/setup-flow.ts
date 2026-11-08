@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { TARGETS, type Target } from "../schema/index.js";
 import { yesNo, type InitIo } from "./init-flow.js";
-import { STARTER_REACHES_NO_FILE, TARGET_STATES, defaultForgeDir, derivedName, rulesReachNoFile, setupForgeFiles } from "./setup.js";
+import { STARTER_REACHES_NO_FILE, TARGET_STATES, defaultForgeDir, derivedName, rulesReachNoFile, setupForgeFiles, shellQuote } from "./setup.js";
 import { checkSetupFlags, checkSetupPlaces, holdsClaude } from "./setup-write.js";
 
 /** What the flags gave; a key left `undefined` is asked. */
@@ -31,7 +31,8 @@ export interface SetupAnswers {
   starter: boolean;
   git: boolean;
   workspaces: string[];
-  import: boolean;
+  /** The workspace whose `.claude/` fills the Forge (§4.4), or null for the starter or skeleton branch. */
+  importWs: string | null;
 }
 
 export interface SetupFlowContext {
@@ -77,19 +78,48 @@ async function askChecked(io: InitIo, question: string, dflt: string, check: (v:
  */
 export async function askSetup(given: SetupGiven, io: InitIo, ctx: SetupFlowContext): Promise<SetupAskResult> {
   const cancelled: SetupAskResult = { kind: "cancelled" };
-  const workspaces = given.workspaces.map((w) => path.resolve(ctx.cwd, w));
+  const workspaces: string[] = [];
+  // The import decision (§4.4, S8, S9): one workspace imported, or the import declined for all — never a mix.
   let importWs: string | null = null;
-  if (given.import === true) {
-    for (const w of workspaces) if (await holdsClaude(w)) importWs ??= w;
+  let declined = given.import === false;
+
+  /** A workspace holding `.claude/` asked about the import; "refused" when another one was imported already (S9). */
+  const decide = async (dir: string): Promise<"ok" | "refused" | null> => {
+    if (!(await holdsClaude(dir))) return "ok";
+    if (importWs !== null) {
+      io.say(`setup imports one workspace — ${importWs} is imported; start ${dir} afterwards with craftar import and craftar init`);
+      return "refused";
+    }
+    if (declined) return "ok";
+    if (given.import === true) {
+      importWs = dir;
+      return "ok";
+    }
+    const yes = await askYesNo(io, `${dir} holds .claude/. Import it into the Forge [yes]: `, true);
+    if (yes === null) return null;
+    if (yes) importWs = dir;
+    else declined = true;
+    return "ok";
+  };
+
+  // The workspaces the flags gave go through the same decision, so the flags form's S8 never reaches a confirmed run.
+  for (const w of given.workspaces) {
+    const abs = path.resolve(ctx.cwd, w);
+    const d = await decide(abs);
+    if (d === null) return cancelled;
+    if (d === "refused") return cancelled;
+    workspaces.push(abs);
   }
 
   // Q1: the current directory holds .claude/.
-  if (given.import === undefined && workspaces.length === 0 && (await holdsClaude(ctx.cwd)) && !(await hasConfig(ctx.cwd))) {
+  if (given.import === undefined && given.workspaces.length === 0 && (await holdsClaude(ctx.cwd)) && !(await hasConfig(ctx.cwd))) {
     const yes = await askYesNo(io, "This directory holds a Claude Code harness. Create a Forge from it (import) [yes]: ", true);
     if (yes === null) return cancelled;
     if (yes) {
       workspaces.push(ctx.cwd);
       importWs = ctx.cwd;
+    } else {
+      declined = true;
     }
   }
 
@@ -119,17 +149,24 @@ export async function askSetup(given: SetupGiven, io: InitIo, ctx: SetupFlowCont
     ));
   if (profile === null) return cancelled;
 
-  // Q7 (asked before the targets, since an imported workspace decides them): the workspaces.
+  // Q7 (asked before the targets, since an imported workspace decides them): the workspaces, each checked (S2, S7, S9).
   if (given.workspaces.length === 0) {
-    const inside = isInside(ctx.cwd, forgeAbs);
-    if (!workspaces.includes(ctx.cwd) && !inside && !(await hasConfig(ctx.cwd))) {
-      const yes = await askYesNo(io, `Start a workspace in ${ctx.cwd} [yes]: `, true);
-      if (yes === null) return cancelled;
-      if (yes) {
-        const imp = await offerImport(io, ctx.cwd, importWs);
-        if (imp === null) return cancelled;
-        workspaces.push(ctx.cwd);
-        if (imp) importWs = ctx.cwd;
+    if (!workspaces.includes(ctx.cwd)) {
+      // The current directory is offered only when it could be one (S2, S7); otherwise the reason is said.
+      const place = await checkSetupPlaces(forgeAbs, [ctx.cwd], ctx.home, ctx.platform).then(
+        () => null,
+        (e: Error) => e.message,
+      );
+      if (place !== null) {
+        io.say(`not offering ${ctx.cwd} as a workspace: ${place}`);
+      } else {
+        const yes = await askYesNo(io, `Start a workspace in ${ctx.cwd} [yes]: `, true);
+        if (yes === null) return cancelled;
+        if (yes) {
+          const d = await decide(ctx.cwd);
+          if (d === null) return cancelled;
+          if (d === "ok") workspaces.push(ctx.cwd);
+        }
       }
     }
     for (;;) {
@@ -142,10 +179,9 @@ export async function askSetup(given: SetupGiven, io: InitIo, ctx: SetupFlowCont
       if (more === null) return cancelled;
       if (more === "") break;
       const abs = path.resolve(ctx.cwd, more);
-      const imp = await offerImport(io, abs, importWs);
-      if (imp === null) return cancelled;
-      workspaces.push(abs);
-      if (imp) importWs = abs;
+      const d = await decide(abs);
+      if (d === null) return cancelled;
+      if (d === "ok") workspaces.push(abs);
     }
   }
 
@@ -172,13 +208,7 @@ export async function askSetup(given: SetupGiven, io: InitIo, ctx: SetupFlowCont
     }
   }
 
-  return { kind: "answered", answers: { forgeAbs, name, profile, targets, starter, git: given.git, workspaces, import: importWs !== null } };
-}
-
-/** S8 in the flow: a directory holding `.claude/` is offered the import while no workspace was imported yet. */
-async function offerImport(io: InitIo, dir: string, importWs: string | null): Promise<boolean | null> {
-  if (importWs !== null || !(await holdsClaude(dir))) return false;
-  return askYesNo(io, `${dir} holds .claude/. Import it into the Forge [yes]: `, true);
+  return { kind: "answered", answers: { forgeAbs, name, profile, targets, starter, git: given.git, workspaces, importWs } };
 }
 
 /**
@@ -187,8 +217,8 @@ async function offerImport(io: InitIo, dir: string, importWs: string | null): Pr
  */
 export async function confirmSetup(a: SetupAnswers, io: InitIo, opts: { sync: boolean }): Promise<"confirmed" | "cancelled"> {
   io.say(`craftar setup — about to create the Forge ${a.name} at ${a.forgeAbs}`);
-  if (a.import) {
-    io.say(`  craftar.forge.yaml, README.md, then import ${a.workspaces.find((w) => w) ?? ""} as profile ${a.profile}`);
+  if (a.importWs !== null) {
+    io.say(`  craftar.forge.yaml, README.md, then import ${a.importWs} as profile ${a.profile}`);
   } else {
     for (const f of setupForgeFiles({ name: a.name, profile: a.profile, targets: a.targets, starter: a.starter })) io.say(`  + ${f.path}`);
     if (a.starter && rulesReachNoFile(a.targets)) io.say(`  note ${STARTER_REACHES_NO_FILE}`);
@@ -208,32 +238,27 @@ export async function confirmSetup(a: SetupAnswers, io: InitIo, opts: { sync: bo
   }
 }
 
-/** The `again` line: the same run as flags, for CI (§4.5). */
-export function setupAgainLine(a: SetupAnswers, cwd: string, opts: { sync: boolean }): string {
-  const q = (s: string) => (/^[\w./-]+$/.test(s) ? s : JSON.stringify(s));
+/** The `again` line: the same run as flags, for CI (§4.5); every value quoted by `shellQuote` for the platform's shell. */
+export function setupAgainLine(a: SetupAnswers, cwd: string, opts: { sync: boolean; platform: NodeJS.Platform }): string {
+  const q = (s: string) => shellQuote(s, opts.platform);
   const rel = (abs: string) => {
     const r = path.relative(cwd, abs);
     return r === "" ? "." : r;
   };
   const parts = ["  again craftar setup", `--forge-dir ${q(rel(a.forgeAbs))}`, `--name ${q(a.name)}`, `--profile ${q(a.profile)}`];
-  if (!a.import) {
+  if (a.importWs === null) {
     parts.push(`--targets ${a.targets.join(",")}`);
     if (!a.starter) parts.push("--no-starter");
   }
   if (!a.git) parts.push("--no-git");
   for (const w of a.workspaces) parts.push(`--workspace ${q(rel(w))}`);
-  if (a.workspaces.length > 0) parts.push(a.import ? "--import" : "--no-import");
+  if (a.importWs !== null) parts.push("--import");
+  else if (a.workspaces.length > 0) parts.push("--no-import");
   if (!opts.sync) parts.push("--no-sync");
   return parts.join(" ");
 }
-
 function splitList(v: string): string[] {
   return v.split(",").map((t) => t.trim()).filter((t) => t !== "");
-}
-
-function isInside(child: string, parent: string): boolean {
-  const r = path.relative(parent, child);
-  return r === "" || (!r.startsWith("..") && !path.isAbsolute(r));
 }
 
 async function hasConfig(dir: string): Promise<boolean> {

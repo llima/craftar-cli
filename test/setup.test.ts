@@ -142,7 +142,7 @@ describe("proveSetupForge (S10)", () => {
   it("refuses a Forge that does not plan, naming the Forge directory and never the scratch one, and leaves no scratch behind", async () => {
     const { proveSetupForge } = await import("../src/core/setup-write.js");
     const os = await import("node:os");
-    const before = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith("craftar-setup-"));
+    const before = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith("craftar-setup-proof-"));
     const files = setupForgeFiles({ name: "f", profile: "acme", targets: ["claude-code"], starter: false }).map((f) =>
       f.path === "profiles/acme/profile.yaml" ? { ...f, text: "name: acme\nrecipes:\n  - missing\ntargets:\n  - claude-code\n" } : f,
     );
@@ -152,7 +152,7 @@ describe("proveSetupForge (S10)", () => {
     );
     expect(err).toMatch(/^setup: the new Forge would not load and plan — /);
     expect(err).toContain("missing");
-    expect(err).not.toMatch(/craftar-setup-/);
-    expect((await fs.readdir(os.tmpdir())).filter((n) => n.startsWith("craftar-setup-"))).toEqual(before);
+    expect(err).not.toMatch(/craftar-setup-proof-/);
+    expect((await fs.readdir(os.tmpdir())).filter((n) => n.startsWith("craftar-setup-proof-"))).toEqual(before);
   });
 });

@@ -5,7 +5,7 @@
 import path from "node:path";
 import { TARGETS, type Target } from "../schema/index.js";
 import { TARGET_SINCE } from "./native-targets.js";
-import { profileYamlText } from "./new-profile.js";
+import { profileYamlText, yamlSafe } from "./new-profile.js";
 
 /** One file of the new Forge, Forge-relative with `/`, written LF without a BOM. */
 export interface SetupFile {
@@ -165,7 +165,7 @@ This rule lives in the Forge at \`ingredients/rules/${STARTER_RULE}/rule.md\`. E
  */
 export function setupForgeFiles(a: SetupForgeAnswers): SetupFile[] {
   const files: SetupFile[] = [
-    { path: "craftar.forge.yaml", text: `name: ${a.name}\nschema: ${setupSchema(a.targets)}\ndescription: ${MANIFEST_DESCRIPTION}\n` },
+    { path: "craftar.forge.yaml", text: `name: ${yamlSafe(a.name)}\nschema: ${setupSchema(a.targets)}\ndescription: ${MANIFEST_DESCRIPTION}\n` },
     { path: "README.md", text: readmeText(a.name, a.profile) },
     { path: `profiles/${a.profile}/profile.yaml`, text: profileYamlText(a.profile, a.starter ? [STARTER_RECIPE] : [], [...a.targets]) },
   ];
@@ -194,6 +194,16 @@ export function showsSetupHint(isTty: boolean, registry: RegistryView): boolean 
 }
 
 export const SETUP_HINT = "new here? run craftar setup";
+
+/**
+ * A path quoted for the shell a printed command is pasted into (§4.8, the `again` line): POSIX single quotes, a `'` written
+ * `'\\''`, so `$`, a backtick, `\\` and `"` stay literal; win32 double quotes for `cmd` (S1 refuses `"` and `%` there). A plain
+ * path (letters, digits, `_`, `.`, `/`, `-`, `:`, `\\` on win32) is printed bare.
+ */
+export function shellQuote(p: string, platform: NodeJS.Platform): string {
+  if (platform === "win32") return /^[\w.\\/:-]+$/.test(p) ? p : `"${p}"`;
+  return /^[\w./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`;
+}
 
 /** Every target name setup can offer, in `TARGETS` order. */
 export const SETUP_TARGETS: readonly Target[] = TARGETS;

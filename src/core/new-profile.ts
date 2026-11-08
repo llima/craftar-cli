@@ -18,7 +18,7 @@ import { parseYamlText } from "./yaml-read.js";
  * YAML-safe a list item: when `YAML.stringify(value).trim()` differs from the plain value,
  * use the stringified form (so `123`, `true`, `null` are quoted).
  */
-function yamlSafe(value: string): string {
+export function yamlSafe(value: string): string {
   const stringified = YAML.stringify(value).trim();
   return stringified !== value ? stringified : value;
 }

@@ -51,7 +51,7 @@ describe("askSetup", () => {
     expect(io.asked[5]).not.toContain("gemini");
     expect(r).toEqual({
       kind: "answered",
-      answers: { forgeAbs: path.join(root, "acme-app-forge"), name: "acme-app-forge", profile: "acme-app", targets: ["kiro", "opencode"], starter: true, git: true, workspaces: [cwd], import: false },
+      answers: { forgeAbs: path.join(root, "acme-app-forge"), name: "acme-app-forge", profile: "acme-app", targets: ["kiro", "opencode"], starter: true, git: true, workspaces: [cwd], importWs: null },
     });
   });
 
@@ -72,7 +72,7 @@ describe("askSetup", () => {
     expect(io.asked[0]).toBe("This directory holds a Claude Code harness. Create a Forge from it (import) [yes]: ");
     expect(io.asked.some((q) => q.startsWith("Targets"))).toBe(false);
     expect(io.asked.some((q) => q.startsWith("Add a starter"))).toBe(false);
-    expect(r.kind === "answered" && r.answers).toMatchObject({ import: true, workspaces: [cwd], starter: false, targets: ["claude-code"] });
+    expect(r.kind === "answered" && r.answers).toMatchObject({ importWs: cwd, workspaces: [cwd], starter: false, targets: ["claude-code"] });
   });
 
   it("refuses a Forge location that is not empty, then takes the next answer", async () => {
@@ -99,7 +99,7 @@ describe("askSetup", () => {
 });
 
 describe("confirmSetup and the again line", () => {
-  const answers = { forgeAbs: "/w/acme-forge", name: "acme-forge", profile: "acme", targets: ["codex" as const], starter: true, git: true, workspaces: ["/w/app"], import: false };
+  const answers = { forgeAbs: "/w/acme-forge", name: "acme-forge", profile: "acme", targets: ["codex" as const], starter: true, git: true, workspaces: ["/w/app"], importWs: null };
 
   it("lists the files, notes S12, and asks once; no and an ended input cancel", async () => {
     const io = fakeIo([""]);
@@ -112,8 +112,43 @@ describe("confirmSetup and the again line", () => {
   });
 
   it("the again line is the same run as flags", () => {
-    expect(setupAgainLine(answers, "/w", { sync: false })).toBe(
+    expect(setupAgainLine(answers, "/w", { sync: false, platform: "linux" })).toBe(
       "  again craftar setup --forge-dir acme-forge --name acme-forge --profile acme --targets codex --workspace app --no-import --no-sync",
     );
   });
 });
+
+describe("askSetup — review round 1", () => {
+  it("refuses a second workspace holding .claude/ once one is imported, at the answer (S9)", async () => {
+    const { root, cwd, ctx } = await cwdDir({ ".claude/rules/a.md": "a\n" });
+    await writeFiles(path.join(root, "b"), { ".claude/rules/b.md": "b\n" });
+    const io = fakeIo(["", "", "", "", path.join(root, "b"), ""]);
+    const r = await askSetup(none, io, ctx);
+    expect(io.said.some((l) => l.startsWith("setup imports one workspace"))).toBe(true);
+    expect(r.kind === "answered" && r.answers).toMatchObject({ importWs: cwd, workspaces: [cwd] });
+  });
+
+  it("offers the import for a workspace the flags gave", async () => {
+    const { root, ctx } = await cwdDir();
+    await writeFiles(path.join(root, "b"), { ".claude/rules/b.md": "b\n" });
+    const io = fakeIo(["", "", "", "", ""]);
+    const r = await askSetup({ ...none, workspaces: [path.join(root, "b")] }, io, ctx);
+    expect(io.asked[0]).toBe(`${path.join(root, "b")} holds .claude/. Import it into the Forge [yes]: `);
+    expect(r.kind === "answered" && r.answers.importWs).toBe(path.join(root, "b"));
+  });
+
+  it("does not offer the current directory when the Forge would nest in it, and says why (S2)", async () => {
+    const { cwd, ctx } = await cwdDir();
+    const io = fakeIo([path.join(cwd, "forge"), "", "", "", "", ""]);
+    const r = await askSetup(none, io, ctx);
+    expect(io.said.some((l) => l.startsWith(`not offering ${cwd} as a workspace: the Forge and a workspace cannot nest`))).toBe(true);
+    expect(io.asked.some((q) => q.startsWith("Start a workspace in"))).toBe(false);
+    expect(r.kind === "answered" && r.answers.workspaces).toEqual([]);
+  });
+
+  it("quotes the again line for a POSIX shell", () => {
+    const a = { forgeAbs: "/w/it's $f", name: "f", profile: "acme", targets: ["claude-code" as const], starter: true, git: true, workspaces: [], importWs: null };
+    expect(setupAgainLine(a, "/w", { sync: true, platform: "linux" })).toContain(`--forge-dir 'it'\\''s $f'`);
+  });
+});
+

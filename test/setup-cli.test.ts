@@ -188,10 +188,10 @@ describe.skipIf(process.platform === "win32")("craftar setup — a failure after
     expect(r.stderr).toContain("  profiles/acme/profile.yaml");
     expect(r.stderr).toContain("  .git");
     const forge = path.join(root, "it's $f");
-    expect(r.stderr).toContain(`  rm -r '${forge.replace(/'/g, `'\\''`)}'`);
+    expect(r.stderr).toContain(`  rm -rf '${forge.replace(/'/g, `'\\''`)}'`);
     await expect(fs.access(path.join(root, "ws"))).rejects.toThrow();
     // The printed undo works as printed.
-    const undo = r.stderr.split("\n").find((l) => l.startsWith("  rm -r "))!.trim();
+    const undo = r.stderr.split("\n").find((l) => l.startsWith("  rm -rf "))!.trim();
     expect(spawnSync("sh", ["-c", undo], { cwd: root }).status).toBe(0);
     await expect(fs.access(forge)).rejects.toThrow();
   }, T);
@@ -204,5 +204,106 @@ describe("craftar with no arguments (§4.6)", () => {
     expect(r.code).toBe(1);
     expect(r.stdout + r.stderr).toContain("setup [options]");
     expect(r.stdout + r.stderr).not.toContain("new here?");
+  }, T);
+});
+
+describe("craftar setup — review round 1", () => {
+  it("prints import's summary, a rejected ingredient included (nothing dropped silently)", async () => {
+    const { root, run } = await sandbox();
+    const token = "ghp_" + "x".repeat(36);
+    await writeFiles(path.join(root, "ws"), { ".claude/rules/workflow.md": "# Workflow\n", ".claude/rules/sec.md": `token ${token}\n` });
+    const r = run(["setup", "--forge-dir", "f", "--profile", "acme", "--workspace", "ws", "--import"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/1 rejected/);
+    expect(r.stdout).toMatch(/rejected rule\/sec — secret-like value/);
+    expect(r.stdout + r.stderr).not.toContain(token);
+  }, T);
+
+  it("an import refusal comes before any write: the Forge directory is never created", async () => {
+    const { root, run } = await sandbox();
+    await writeFiles(path.join(root, "ws"), { ".claude/rules/r.md": "<!-- craftar:section tone -->\nx\n<!-- /craftar:section -->\n" });
+    const before = await tree(root);
+    const r = run(["setup", "--forge-dir", "f", "--profile", "acme", "--workspace", "ws", "--import"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^error: setup: the new Forge would not load and plan — /);
+    expect(r.stderr).not.toContain("left untouched");
+    expect(r.stderr).not.toContain("craftar-setup-proof-");
+    expect(await tree(root)).toEqual(before);
+  }, T);
+
+  it("a Forge name YAML would read as a number is quoted, and the Forge loads", async () => {
+    const { root, run } = await sandbox();
+    const r = run(["setup", "--forge-dir", "123", "--profile", "acme"]);
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(0);
+    expect(await fs.readFile(path.join(root, "123/craftar.forge.yaml"), "utf8")).toMatch(/^name: "123"\n/);
+  }, T);
+
+  it("S6 asks git outside any enclosing repository: an identity only an outer repository holds does not count (test 4)", async () => {
+    const { root, run } = await sandbox();
+    expect(git(root, "init", "-q").code).toBe(0);
+    expect(git(root, "config", "user.name", "outer").code).toBe(0);
+    expect(git(root, "config", "user.email", "outer@example.invalid").code).toBe(0);
+    const before = await tree(root);
+    const r = run(["setup", "--forge-dir", "f", "--profile", "acme"], {
+      // Unset (spawnSync drops an undefined value), so only configuration can give the identity.
+      GIT_AUTHOR_NAME: undefined, GIT_AUTHOR_EMAIL: undefined, GIT_COMMITTER_NAME: undefined, GIT_COMMITTER_EMAIL: undefined, EMAIL: undefined,
+      GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.useConfigOnly", GIT_CONFIG_VALUE_0: "true",
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("git is needed to create the Forge's first commit");
+    expect(await tree(root)).toEqual(before);
+  }, T);
+
+  it("a global ignore rule for .gitkeep and autocrlf with safecrlf do not stop the commit (test 9)", async () => {
+    const { root, run } = await sandbox();
+    await writeFiles(root, { "global-ignore": ".gitkeep\n" });
+    const r = run(["setup", "--forge-dir", "my forge", "--profile", "acme", "--no-starter"], {
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_0: "core.excludesFile", GIT_CONFIG_VALUE_0: path.join(root, "global-ignore"),
+      GIT_CONFIG_KEY_1: "core.autocrlf", GIT_CONFIG_VALUE_1: "true",
+      GIT_CONFIG_KEY_2: "core.safecrlf", GIT_CONFIG_VALUE_2: "true",
+    });
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(0);
+    const files = git(path.join(root, "my forge"), "ls-files").out.split("\n");
+    expect(files).toContain("recipes/.gitkeep");
+    expect(files).toContain("ingredients/.gitkeep");
+  }, T);
+
+  it("a workspace path that is a file is refused before any write (S7, init's N9)", async () => {
+    const { root, run } = await sandbox();
+    await writeFiles(root, { blocked: "x" });
+    const before = await tree(root);
+    const r = run(["setup", "--forge-dir", "f", "--profile", "acme", "--workspace", "w1", "--workspace", "blocked"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/cannot use .*blocked as a workspace: it is not a directory/);
+    expect(await tree(root)).toEqual(before);
+  }, T);
+});
+
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("craftar setup — a write that fails before anything exists", () => {
+  it("is a plain refusal, with no undo block", async () => {
+    const { root, run } = await sandbox();
+    await fs.mkdir(path.join(root, "ro"));
+    await fs.chmod(path.join(root, "ro"), 0o555);
+    cleanups.push(() => fs.chmod(path.join(root, "ro"), 0o755));
+    const r = run(["setup", "--forge-dir", "ro/f", "--profile", "acme", "--no-git"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toContain("undo with");
+    expect(r.stderr).not.toContain("had already started");
+  }, T);
+
+  it("a workspace that cannot start says which were started and how to finish; the Forge is kept; exit 1", async () => {
+    const { root, run } = await sandbox();
+    await fs.mkdir(path.join(root, "ro2"));
+    await fs.chmod(path.join(root, "ro2"), 0o555);
+    cleanups.push(() => fs.chmod(path.join(root, "ro2"), 0o755));
+    const r = run(["setup", "--forge-dir", "f", "--profile", "acme", "--workspace", "w1", "--workspace", "ro2/w2"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/setup created the Forge and started .*w1; .*ro2\/w2 was not started — fix the cause and run craftar init --forge/);
+    expect(r.stdout).not.toContain("next: edit the Forge");
+    await fs.access(path.join(root, "w1/craftar.lock"));
+    expect(git(path.join(root, "f"), "rev-list", "--count", "HEAD").out).toBe("1");
   }, T);
 });
