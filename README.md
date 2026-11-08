@@ -848,6 +848,7 @@ Not covered — these may change in a minor or a patch: human-readable output an
 
 - A new command, `craftar setup`: creates a Forge from scratch (or by importing a workspace's `.claude/`), makes it a git repository with one initial commit, and starts workspaces on it. It is the one craftar command that commits, only in the directory it creates, never pushes. See *Commands* and *Quick start: no Forge yet*.
 - `craftar` with no arguments, in a terminal, on a machine with no registered workspace, ends its help with `new here? run craftar setup`; `craftar --help`, `craftar help` and every run off a terminal keep their output.
+- The interactive `craftar init`, when a Forge answer names a missing directory or one with no `craftar.forge.yaml`, adds `no Forge yet? run craftar setup to create one` before asking again; its flags form, exit codes and outputs are unchanged.
 - No other command changes; no byte changes for a workspace already in sync.
 
 ### to 1.6.0

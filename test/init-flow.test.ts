@@ -592,7 +592,17 @@ describe("askInit", () => {
     const sc = script([nope, s.forge, "", "", ""]);
     await askInit(s.ws, given, local, sc.io, { home: s.home, registryOff: false, exists: existsSync });
     expect(sc.said[0]).toBe(`Forge not found at ${nope}`);
+    // Spec 62 §14 (ruled 2026-11-08): the re-ask points a new user at craftar setup.
+    expect(sc.said[1]).toBe("no Forge yet? run craftar setup to create one");
     expect(sc.asked[1]).toBe(`Forge — a directory or a git URL [${nope}]: `);
+
+    // A directory that is not a Forge says the same hint after its own line.
+    const empty = path.join(s.root, "empty");
+    await fs.mkdir(empty);
+    const sc3 = script([empty, s.forge, "", "", ""]);
+    await askInit(s.ws, given, local, sc3.io, { home: s.home, registryOff: false, exists: existsSync });
+    expect(sc3.said[0]).toMatch(/^not a Forge: /);
+    expect(sc3.said[1]).toBe("no Forge yet? run craftar setup to create one");
 
     // With given.forge = nope → throws
     const given2: InitGiven = { forge: nope, addRecipes: [], removeRecipes: [], replace: false };
