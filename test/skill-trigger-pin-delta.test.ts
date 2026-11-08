@@ -23,18 +23,20 @@ const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
 const STRIPPED: Record<string, string> = {
   // agents-md-primary-off and rules-index-off moved for 1.5.0 (claude-code leaves out an agent's empty tools line; the regenerated
-  // pins were checked by script to differ only by that line and its hashes).
-  "agents-md-primary-off": "a491269a773b7629560b85e32833b4739142322623c03df1d15d123df51a0656",
+  // pins were checked by script to differ only by that line and its hashes). They, and real-path-containment-off, moved again for
+  // 1.8.0: the agents-md skip of an ingredient another target writes is silent — regenerated with their flags, checked by script
+  // to differ only by those warning lines and doctor's resulting `plan` `ok` line and summary.
+  "agents-md-primary-off": "854ebd1c710035d67ec4bc993e96a6c33407fd39bab666f2b666e243ad2f46bc",
   "profile-local-off": "0c8762015e0b291e895301a30b169ef40d03e449fc08aa20a81919803b4e8892",
-  "real-path-containment-off": "e55dbd181272524088b1974f67824470dec4df888424e1467a190adcde182aca",
-  "rules-index-off": "bf2f8f6b6e387363a5037b521e6ed5785e236b538dec4cf310081f18bf593f03",
+  "real-path-containment-off": "af774a0592577dafbc01016611f3b3f3185ea594edcdfed772517e5d002a60bc",
+  "rules-index-off": "5abdc02a3149bfcde42559fea8822378460078cbc011d180961830c1705f8730",
   "target-sections-off": "0828cb9c57f43e125ad4e6935e86f1649651523c33a95b82d435e6a47ea224b1",
 };
 const UNMOVED: Record<string, string> = {
   "check-committed-off": "a23e75649bb333461ba89e062c192bae2ce2659a6a7b693c744034974aa1c976",
   // metadata-params-off's hash moved for spec 57 (kiro writes LF on a new file) and for 1.5.0 (an agent's empty tools line left
-  // out, checked by script); it still holds no skill.
-  "metadata-params-off": "9e524be2a9a87e54d3ea8367836290c7a8c092699764238abd12b7a821887505",
+  // out, checked by script), and for 1.8.0 (the covered agents-md skip warning silent, checked by script); it still holds no skill.
+  "metadata-params-off": "0268283979272317aab549f7bcfa854fda879d2a33e12b3756a475a37b69cedf",
   "settings-apply-off": "1369dc58b74b5c287edb7885680b92c8a11c455d32cf9eb3b178adf27e4d2676",
 };
 

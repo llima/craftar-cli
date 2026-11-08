@@ -567,12 +567,16 @@ function spec(type: string, name: string, extra: Record<string, unknown> = {}): 
   return { meta: meta as IngredientSpec["meta"], files };
 }
 
-async function resolutionOf(ings: IngredientSpec[]): Promise<Resolution> {
+/**
+ * `targets` defaults to claude-code, kiro and agents-md. The agents-md skip is silent for an ingredient another target of the
+ * workspace writes (test/agents-md-covered-skip.test.ts), so the walk's agents-md mechanics are measured on agents-md alone.
+ */
+async function resolutionOf(ings: IngredientSpec[], targets: string[] = ["claude-code", "kiro", "agents-md"]): Promise<Resolution> {
   const s = await scenario(
     {
       ingredients: ings,
       recipes: [recipe("base", ings.map((i) => `${i.meta.type}/${i.meta.name}`))],
-      profiles: [profile("acme", ["base"], ["claude-code", "kiro", "agents-md"])],
+      profiles: [profile("acme", ["base"], targets)],
     },
     { config: { profile: "acme" } },
   );
@@ -622,9 +626,10 @@ describe("written() — the walk decides and warns from the matrix (spec 18 §9.
   it("the 33 unsupported cells: not yielded, today's text; not aimed → no warning", async () => {
     expect(UNSUPPORTED).toHaveLength(33);
     for (const [target, type, text] of UNSUPPORTED) {
-      expect(record(await resolutionOf([spec(type, "x")]), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
+      const targets = target === "agents-md" ? ["agents-md"] : undefined;
+      expect(record(await resolutionOf([spec(type, "x")], targets), target), `${target} · ${type}`).toEqual([`warn ${text}`]);
       const other = target === "claude-code" ? ["kiro"] : ["claude-code"];
-      expect(record(await resolutionOf([spec(type, "x", { targets: other })]), target), `${target} · ${type} not aimed`).toEqual([]);
+      expect(record(await resolutionOf([spec(type, "x", { targets: other })], targets), target), `${target} · ${type} not aimed`).toEqual([]);
     }
   });
 
@@ -670,7 +675,7 @@ describe("written() — the walk decides and warns from the matrix (spec 18 §9.
   });
 
   it("per type: nothing at call time; on the first pull one line per type, first-appearance order, then the rule", async () => {
-    const r = await resolutionOf([spec("agent", "x"), spec("script", "s"), spec("agent", "y"), spec("rule", "r")]);
+    const r = await resolutionOf([spec("agent", "x"), spec("script", "s"), spec("agent", "y"), spec("rule", "r")], ["agents-md"]);
     const log: string[] = [];
     const walk = written(r, "agents-md", (m) => log.push(`warn ${m}`));
     expect(log).toEqual([]);
@@ -683,7 +688,7 @@ describe("written() — the walk decides and warns from the matrix (spec 18 §9.
   });
 
   it("per type with nothing to yield: the first pull warns and finishes", async () => {
-    const r = await resolutionOf([spec("agent", "x")]);
+    const r = await resolutionOf([spec("agent", "x")], ["agents-md"]);
     const log: string[] = [];
     const walk = written(r, "agents-md", (m) => log.push(`warn ${m}`));
     const it = walk[Symbol.iterator]();

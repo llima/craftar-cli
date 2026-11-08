@@ -389,10 +389,19 @@ const FOLDER_SKILLS_OF_CLAUDE_CODE: Carrier = {
  * target writes into a file this tool reads is warned unless that carrier is among the workspace's targets and the ingredient
  * is aimed at it. Not part of `targets --json`.
  */
-const SKIP_WARNING: Record<Target, { label: string; per: "ingredient" | "type"; carriers?: Partial<Record<IngredientType, Carrier | readonly Carrier[]>> }> = {
+const SKIP_WARNING: Record<
+  Target,
+  {
+    label: string;
+    per: "ingredient" | "type";
+    carriers?: Partial<Record<IngredientType, Carrier | readonly Carrier[]>>;
+    /** Silent for an ingredient another target of the workspace writes (aimed there, its cell not `unsupported`): `AGENTS.md` sits beside every tool's own files, so that skip loses nothing. */
+    silentWhenWritten?: true;
+  }
+> = {
   "claude-code": { label: "Claude Code", per: "ingredient" },
   kiro: { label: "Kiro", per: "ingredient" },
-  "agents-md": { label: "AGENTS.md", per: "type" },
+  "agents-md": { label: "AGENTS.md", per: "type", silentWhenWritten: true },
   cursor: { label: "Cursor", per: "type", carriers: { command: "agent-skills", skill: "agent-skills", hook: "claude-code" } },
   copilot: { label: "Copilot", per: "type", carriers: { skill: "agent-skills", hook: "claude-code" } },
   "agent-skills": { label: "Agent Skills", per: "type" },
@@ -419,7 +428,7 @@ export function written<T extends Target>(
   warn: (msg: string) => void,
   matrix: Record<Target, Record<IngredientType, Capability>> = CAPABILITIES,
 ): Walk<T> {
-  const { label, per, carriers } = SKIP_WARNING[target];
+  const { label, per, carriers, silentWhenWritten } = SKIP_WARNING[target];
   // A "through X" cell whose carrier is among the targets and writes this ingredient (it is aimed there): the content
   // reaches the tool in X's file — nothing to say. An ingredient whose `targets` leave the carrier out is warned.
   const carried = (ing: ResolvedIngredient) => {
@@ -432,6 +441,12 @@ export function written<T extends Target>(
       return typeof one === "string" || one.only(ing, resolution);
     });
   };
+  // Another target of the workspace writes this ingredient (it is aimed there and the matrix handed in does not mark its cell
+  // unsupported): for a target marked silentWhenWritten, nothing is lost — nothing to say.
+  const writtenElsewhere = (ing: ResolvedIngredient) =>
+    silentWhenWritten === true &&
+    resolution.targets.some((t) => t !== target && matrix[t][ing.meta.type].state !== "unsupported" && appliesTo(effectiveTargets(ing.meta, resolution), t));
+  const quiet = (ing: ResolvedIngredient) => carried(ing) || writtenElsewhere(ing);
   let started = false;
   let finished = false;
   function* walk(): Generator<WrittenIngredient<T>> {
@@ -439,7 +454,7 @@ export function written<T extends Target>(
     const skips = (ing: ResolvedIngredient) => matrix[target][ing.meta.type].state === "unsupported";
     if (per === "type") {
       const byType = new Map<string, string[]>();
-      for (const ing of aimed) if (skips(ing) && !carried(ing)) byType.set(ing.meta.type, [...(byType.get(ing.meta.type) ?? []), ing.ref]);
+      for (const ing of aimed) if (skips(ing) && !quiet(ing)) byType.set(ing.meta.type, [...(byType.get(ing.meta.type) ?? []), ing.ref]);
       for (const [type, refs] of byType)
         warn(`${target}: ${refs.length} ${type} ingredient(s) have no ${label} equivalent — skipped: ${refs.join(", ")}`);
     }
@@ -448,7 +463,7 @@ export function written<T extends Target>(
         // The one narrowing cast: the matrix said this target writes the type (with a test table the
         // static type and what is yielded can disagree — in that test only).
         yield ing as WrittenIngredient<T>;
-      } else if (per === "ingredient" && !carried(ing)) {
+      } else if (per === "ingredient" && !quiet(ing)) {
         warn(`${target}: ${ing.meta.type} ${ing.ref} has no ${label} equivalent — skipped`);
       }
     }
