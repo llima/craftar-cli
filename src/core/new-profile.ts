@@ -18,9 +18,33 @@ import { parseYamlText } from "./yaml-read.js";
  * YAML-safe a list item: when `YAML.stringify(value).trim()` differs from the plain value,
  * use the stringified form (so `123`, `true`, `null` are quoted).
  */
-function yamlSafe(value: string): string {
+export function yamlSafe(value: string): string {
   const stringified = YAML.stringify(value).trim();
   return stringified !== value ? stringified : value;
+}
+
+/**
+ * The text of a profile that holds `name`, `recipes` and `targets` only — the one builder (spec 38 §5.1, spec 62 §5.1): block
+ * lists, `recipes: []` only when empty, LF, a final newline. The text is proved to parse back to the same three keys.
+ * @throws When the text does not read back (a programming error).
+ */
+export function profileYamlText(name: string, recipes: readonly string[], targets: readonly string[]): string {
+  const lines: string[] = [];
+  lines.push(`name: ${yamlSafe(name)}`);
+  if (recipes.length === 0) {
+    lines.push("recipes: []");
+  } else {
+    lines.push("recipes:");
+    for (const r of recipes) lines.push(`  - ${yamlSafe(r)}`);
+  }
+  lines.push("targets:");
+  for (const t of targets) lines.push(`  - ${yamlSafe(t)}`);
+  const text = lines.join("\n") + "\n";
+  const parsed = ProfileSchema.parse(parseYamlText("generated profile", text));
+  if (parsed.name !== name || JSON.stringify(parsed.recipes) !== JSON.stringify(recipes) || JSON.stringify(parsed.targets) !== JSON.stringify(targets)) {
+    throw new Error(`newProfile: the generated text does not match the profile (programming error)`);
+  }
+  return text;
 }
 
 /**
@@ -174,33 +198,7 @@ export function newProfile(forge: Forge, o: NewProfileOptions): NewProfileResult
     targets,
   });
 
-  // Generate text: name: <name>\n + recipes block + targets block
-  const lines: string[] = [];
-  lines.push(`name: ${yamlSafe(name)}`);
-  if (finalRecipes.length === 0) {
-    lines.push("recipes: []");
-  } else {
-    lines.push("recipes:");
-    for (const r of finalRecipes) {
-      lines.push(`  - ${yamlSafe(r)}`);
-    }
-  }
-  lines.push("targets:");
-  for (const t of targets) {
-    lines.push(`  - ${yamlSafe(t)}`);
-  }
-  const text = lines.join("\n") + "\n";
-
-  // Prove that text parses back to the profile — a programming error otherwise
-  const parsed = parseYamlText("generated profile", text);
-  const parsedProfile = ProfileSchema.parse(parsed);
-  if (
-    parsedProfile.name !== profile.name ||
-    JSON.stringify(parsedProfile.recipes) !== JSON.stringify(profile.recipes) ||
-    JSON.stringify(parsedProfile.targets) !== JSON.stringify(profile.targets)
-  ) {
-    throw new Error(`newProfile: the generated text does not match the profile (programming error)`);
-  }
+  const text = profileYamlText(name, finalRecipes, targets);
 
   // 8. blockNote (only with a template)
   let blockNote: string | null = null;

@@ -101,6 +101,8 @@ export interface ImportReport {
   configForgeKept: string | null;
   /** The Kiro part of the report (spec 29 §4.2); the key is absent unless the `report` option asked for it. */
   kiro?: KiroReport;
+  /** Spec 62 §5.3: the Forge paths `flush()` wrote, Forge-relative with `/`, sorted — so `craftar setup` stages them by name. Not printed. */
+  forgeWrites?: string[];
   /**
    * The rules taken from their steering file (spec 29 §4.3), one per named rule that was decided: `ref` as decided, the
    * two workspace files and their line counts, and whether the text built differs from the rule file's. The key is
@@ -149,6 +151,7 @@ export async function importClaudeCode(opts: ImportOptions): Promise<ImportRepor
   }
   await stage.flush();
   const { report, config } = planned;
+  report.forgeWrites = [...stage.written].sort();
   if (config && config.action !== "unchanged") {
     try {
       await fs.writeFile(config.abs, config.content);
@@ -1021,6 +1024,9 @@ export class ForgeStage {
     };
   }
 
+  /** The paths `flush()` wrote, Forge-relative with `/`, in write order. */
+  readonly written: string[] = [];
+
   /** Write every staged file. A failure here names what was already written, since the Forge is no longer untouched. */
   async flush(): Promise<void> {
     // Before the first write (spec 48 §4.4, case M). Import stays ungated on git; any other link inside the Forge is written through.
@@ -1029,7 +1035,7 @@ export class ForgeStage {
       const escapes = await escapeOf(contain, abs);
       if (escapes) throw new Error(`import: ${escapeDestinationLine(path.relative(this.root, abs).split(path.sep).join("/"), escapes)}\nThe Forge was left untouched.`);
     }
-    const written: string[] = [];
+    const written = this.written;
     try {
       await fs.mkdir(this.root, { recursive: true });
       for (const [abs, content] of this.files) {

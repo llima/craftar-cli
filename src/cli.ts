@@ -5,7 +5,7 @@ import pc from "picocolors";
 import path from "node:path";
 import { promises as fs, statSync, type Stats } from "node:fs";
 import YAML from "yaml";
-import { importClaudeCode, LOCAL_MODES } from "./importers/claude-code.js";
+import { importClaudeCode, LOCAL_MODES, type ImportReport } from "./importers/claude-code.js";
 import { parsePreferKiro } from "./importers/prefer-kiro.js";
 import { planPromote, applyPromote, UnheldError } from "./importers/drift-promote.js";
 import { providedRefs } from "./importers/provided.js";
@@ -46,7 +46,7 @@ import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, GEMINI_ORPHAN_WHY, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
-import type { Lock, Registry } from "./schema/index.js";
+import type { Lock, Registry, Target } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, overriddenRoot, withLoadWarnings, type CatalogueContext, type ContextSource, type IngredientEntry } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
@@ -82,7 +82,7 @@ import {
   type PruneResult,
 } from "./core/unify.js";
 import { checkParamWrites, metadataWrites, writeParamFile } from "./core/param-writes.js";
-import { checkInitFlags, checkLocalKeys, initLine, planInit, forgeSource, type InitInput } from "./core/init.js";
+import { checkInitFlags, checkLocalKeys, initLine, planInit, forgeSource, type InitInput, type InitPlan } from "./core/init.js";
 import { profileName } from "./core/new-profile.js";
 import { newProfileGate } from "./core/new-profile-gate.js";
 import { proveNewProfileLoads, writeNewProfile, reproveFromDisk, NewProfileRaceLost, NewProfileLateFailure } from "./core/new-profile-write.js";
@@ -90,6 +90,9 @@ import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type Ini
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
+import { askSetup, confirmSetup, setupAgainLine } from "./core/setup-flow.js";
+import { derivedName, rulesReachNoFile, setupForgeFiles, setupSchema, SETUP_HINT, shellQuote, showsSetupHint, STARTER_REACHES_NO_FILE, type RegistryView } from "./core/setup.js";
+import { checkGitIdentity, checkSetupFlags, checkSetupPlaces, commitSetupForge, GIT_NEEDED, holdsClaude, importIntoSetupForge, parseTargets, proveSetupForge, SetupLateFailure, writeSetupForge, wroteAnything, type ForgeDirState, type SetupWrites } from "./core/setup-write.js";
 import type { Eol } from "./core/text.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { syncWorkspace, editRecipes, confirmWrites, confirmSettings, DISCARDED_ORPHAN } from "./core/write-actions.js";
@@ -112,7 +115,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.6.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.7.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -650,19 +653,18 @@ program
           throw e;
         }
       }
-      console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
-      console.log(`  ${initLine(init)}`);
-      for (const n of step1Notes) console.log(`  note ${n}`);
-      const unset = unsetDeclared(p);
       const cloning = cloneEntries.length > 0;
-      const escaping = escapingRows(init.statuses);
-      const refused = unset.length > 0 || escaping.length > 0 || p.overrideConflicts.length > 0;
-      if (!o.sync) {
-        console.log(nextSyncLine(init.statuses, unset, p.overrideConflicts));
-        for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-        if (cloning && refused && answers === null) {
+      const outcome = await reportStartedWorkspace(root, init, step1Notes, {
+        sync: o.sync,
+        // Between the plan's warnings and the refusal block, as before the lift.
+        beforeBlocks: () => {
+          if (cloning && answers === null) console.log(NOT_CLONED_REFUSED);
+        },
+      });
+      if (outcome.kind === "not-synced") {
+        if (cloning && outcome.refused && answers === null) {
           console.log(NOT_CLONED_REFUSED);
-        } else if (cloning && !refused) {
+        } else if (cloning && !outcome.refused) {
           // Clone even without sync
           await runCloneStep(root, ws.config.profile, cloneEntries, git!, again);
           return;
@@ -672,24 +674,11 @@ program
       }
       // Spec 29 §4.1, §6 case 11: craftar.yaml is written — the workspace layer is a place for the value — and the
       // first sync is not run. exitCode, not fail(): the `again` line still follows the block.
-      if (refused) {
-        for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
-        if (cloning && answers === null) {
-          console.log(NOT_CLONED_REFUSED);
-        }
-        refusalBlock(unset, { thenSync: true });
-        overrideBlock(p, { thenSync: true });
-        escapeBlock(init.statuses, { thenSync: true });
+      if (outcome.kind === "refused") {
         again();
         process.exitCode = 1;
         return;
       }
-      const r = await applyAndReport(ws, p, init.statuses, init.lock);
-      const collisions = r.skipped.filter((s) => s.state === "collision").length;
-      if (collisions)
-        console.log(
-          `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
-        );
       if (cloning) {
         await runCloneStep(root, ws.config.profile, cloneEntries, git!, again);
         return;
@@ -697,6 +686,289 @@ program
       again();
     },
   );
+
+/**
+ * What `init` (and `setup`, for each workspace it starts) prints once `craftar.yaml` is written: the `wrote` line, the init line
+ * and its notes, then either the next-sync line (`--no-sync`), the refusal blocks (a sync that would be refused), or the first
+ * sync with its collision warning. One copy for both commands, so they never drift; `beforeBlocks` runs between the plan's
+ * warnings and the refusal blocks (init's not-cloned line).
+ */
+async function reportStartedWorkspace(
+  root: string,
+  init: InitPlan,
+  notes: readonly string[],
+  opts: { sync: boolean; beforeBlocks?: () => void },
+): Promise<{ kind: "not-synced"; refused: boolean } | { kind: "refused" } | { kind: "synced" }> {
+  const p = init.plan;
+  console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
+  console.log(`  ${initLine(init)}`);
+  for (const n of notes) console.log(`  note ${n}`);
+  const unset = unsetDeclared(p);
+  const refused = unset.length > 0 || escapingRows(init.statuses).length > 0 || p.overrideConflicts.length > 0;
+  if (!opts.sync) {
+    console.log(nextSyncLine(init.statuses, unset, p.overrideConflicts));
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    return { kind: "not-synced", refused };
+  }
+  if (refused) {
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    opts.beforeBlocks?.();
+    refusalBlock(unset, { thenSync: true });
+    overrideBlock(p, { thenSync: true });
+    escapeBlock(init.statuses, { thenSync: true });
+    return { kind: "refused" };
+  }
+  const r = await applyAndReport(init.ws, p, init.statuses, init.lock);
+  const collisions = r.skipped.filter((s) => s.state === "collision").length;
+  if (collisions)
+    console.log(
+      `  ${pc.yellow("warn")} ${collisions} file(s) already in the workspace differ from the Forge and were left as they are — to bring them into the Forge, run craftar import`,
+    );
+  return { kind: "synced" };
+}
+
+/* ---------------------------------------------------------------- setup */
+// Spec 62: a new Forge from scratch (or from an existing .claude/), one initial commit, workspaces started through init's core.
+program
+  .command("setup")
+  .description(
+    "Create a new Forge — craftar.forge.yaml, a first profile and, by default, a starter rule — make it a git repository with one initial commit (no remote, never pushed), then start workspaces on it; a workspace holding .claude/ can fill the Forge by import instead; in a terminal, asks what the flags do not give; never touches an existing Forge",
+  )
+  .option("--forge-dir <dir>", "where the new Forge is created: a directory that does not exist or is empty; asked for in a terminal when omitted")
+  .option("--name <name>", "the Forge's name (default: the directory's name, lower-cased)")
+  .option("--profile <name>", "the first profile's name; asked for in a terminal when omitted")
+  .option("--targets <a,b>", "the profile's targets (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, opencode); default claude-code; the Forge declares the lowest schema they need")
+  .option("--starter", "write a starter rule and the recipe base that lists it (the default)")
+  .option("--no-starter", "write the skeleton only")
+  .option("--git", "make the Forge a git repository with one initial commit (the default)")
+  .option("--no-git", "write the files only, with no repository")
+  .option("--workspace <dir>", "a workspace to start on the new Forge (repeatable); none starts no workspace", collect, [])
+  .option("--import", "fill the Forge by importing the --workspace that holds .claude/")
+  .option("--no-import", "start a --workspace that holds .claude/ from the starter instead")
+  .option("--no-sync", "write each workspace's craftar.yaml only, and say what the first sync would do")
+  .action(async (o: { forgeDir?: string; name?: string; profile?: string; targets?: string; starter?: boolean; git?: boolean; workspace: string[]; import?: boolean; sync: boolean }) => {
+    await setupCommand(o);
+  });
+
+interface SetupOptions {
+  forgeDir?: string;
+  name?: string;
+  profile?: string;
+  targets?: string;
+  starter?: boolean;
+  git?: boolean;
+  workspace: string[];
+  import?: boolean;
+  sync: boolean;
+}
+
+async function setupCommand(o: SetupOptions): Promise<void> {
+  const isTTY = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const flagsForm = o.forgeDir !== undefined && o.profile !== undefined;
+  if (!flagsForm && !isTTY) {
+    fail("setup: --forge-dir and --profile are required when craftar setup does not run in a terminal — pass them, or run craftar setup in a terminal to be asked");
+  }
+  const targets = o.targets === undefined ? undefined : parseTargets(o.targets);
+  // The given flags are checked first, in either mode (S1, S5, S11).
+  try {
+    checkSetupFlags({ forgeDir: o.forgeDir, name: o.name, profile: o.profile ?? "x", targets, workspaces: o.workspace, import: o.import }, process.platform);
+  } catch (e) {
+    fail(errorText(e));
+  }
+  if (flagsForm) {
+    const workspaces = o.workspace.map((w) => path.resolve(w));
+    // S8, S9: the import branch, decided on the flags alone.
+    const withClaude: string[] = [];
+    for (const w of workspaces) if (await holdsClaude(w)) withClaude.push(w);
+    if (withClaude.length > 0 && o.import === undefined) {
+      fail(`${withClaude[0]} holds .claude/ — pass --import to bring it into the new Forge, or --no-import to start it from the starter`);
+    }
+    if (o.import === true && withClaude.length === 0) fail("--import needs a --workspace that holds .claude/");
+    if (o.import === true && withClaude.length > 1) fail("setup imports one workspace — import the others afterwards with craftar import");
+    const ok = await runSetup({
+      forgeAbs: path.resolve(o.forgeDir!),
+      name: o.name ?? derivedName(path.resolve(o.forgeDir!)),
+      profile: o.profile!,
+      targets: (targets ?? ["claude-code"]) as Target[],
+      starter: o.starter !== false,
+      git: o.git !== false,
+      workspaces,
+      importWs: o.import === true ? withClaude[0]! : null,
+      sync: o.sync,
+    });
+    if (!ok) process.exitCode = 1;
+    return;
+  }
+  // The interactive mode (§4.5): the questions, one confirmation, then the same run; the `again` line closes it.
+  const ctx = { cwd: process.cwd(), home: craftarHome(), platform: process.platform };
+  const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+  const asked = await askSetup(
+    { forgeDir: o.forgeDir, name: o.name, profile: o.profile, targets, starter: o.starter, git: o.git !== false, workspaces: o.workspace, import: o.import, sync: o.sync },
+    io,
+    ctx,
+  ).catch((e) => fail(errorText(e)));
+  if (asked.kind === "cancelled") fail("setup cancelled — nothing written");
+  const a = asked.answers;
+  if ((await confirmSetup(a, readlineIo(process.stdin, process.stdout, { terminal: true }), { sync: o.sync })) === "cancelled") fail("setup cancelled — nothing written");
+  const ok = await runSetup({ ...a, sync: o.sync });
+  console.log(setupAgainLine(a, ctx.cwd, { sync: o.sync, platform: process.platform }));
+  if (!ok) process.exitCode = 1;
+}
+
+interface SetupRun {
+  forgeAbs: string;
+  name: string;
+  profile: string;
+  targets: Target[];
+  starter: boolean;
+  git: boolean;
+  workspaces: string[];
+  /** The workspace whose `.claude/` fills the Forge, or null (§4.4). */
+  importWs: string | null;
+  sync: boolean;
+}
+
+/** Steps 1–5 of spec 62 §5.3 for a run whose answers are all known. False when a workspace was not started. */
+async function runSetup(s: SetupRun): Promise<boolean> {
+  const home = craftarHome();
+  let state: ForgeDirState;
+  try {
+    state = await checkSetupPlaces(s.forgeAbs, s.workspaces, home, process.platform);
+  } catch (e) {
+    fail(errorText(e));
+  }
+  // S6: git and an identity, before any write.
+  if (s.git) {
+    if ((await findGit(process.env)) === null) fail(GIT_NEEDED);
+    await checkGitIdentity(process.env).catch((e) => fail(errorText(e)));
+  }
+  const starter = s.importWs === null && s.starter;
+  const all = setupForgeFiles({ name: s.name, profile: s.profile, targets: s.targets, starter });
+  // The import branch writes the manifest and the README; import writes the profile and the rest (§4.4).
+  const files = s.importWs === null ? all : all.filter((f) => f.path === "craftar.forge.yaml" || f.path === "README.md");
+  const notes: string[] = [];
+  if (starter && rulesReachNoFile(s.targets)) notes.push(STARTER_REACHES_NO_FILE);
+  // S10: the proof, on a scratch directory — on the import branch the import itself runs there first, so its refusals come
+  // before any write here.
+  await proveSetupForge(files, s.profile, s.forgeAbs, { home, importWs: s.importWs }).catch((e) => fail(errorText(e)));
+  // Steps 2–4: the Forge, created `wx`; the import; the commit.
+  const writes: SetupWrites = { createdTop: null, written: [], gitInit: false };
+  let commit: string | null = null;
+  let imported: ImportReport | null = null;
+  try {
+    await writeSetupForge(s.forgeAbs, state, files, writes);
+    if (s.importWs !== null) imported = await importIntoSetupForge(s.importWs, s.forgeAbs, s.profile, writes);
+    if (s.git) commit = await commitSetupForge(s.forgeAbs, writes.written, writes, { env: process.env, stdinIsTty: process.stdin.isTTY === true });
+  } catch (e) {
+    if (e instanceof SetupLateFailure) fail(wroteAnything(e.writes) ? setupLateFailure(e, s.forgeAbs, process.platform) : errorText(e.cause));
+    throw e;
+  }
+  const manifest = await fs.readFile(path.join(s.forgeAbs, "craftar.forge.yaml"), "utf8").catch(() => "");
+  const schema = /^schema: (\d+)$/m.exec(manifest)?.[1] ?? String(setupSchema(s.targets));
+  console.log(pc.bold(`craftar setup — created Forge ${s.name} at ${s.forgeAbs} (schema ${schema})`));
+  console.log(`  wrote ${writes.written.join(", ")}`);
+  if (imported !== null) printImportSummary(imported, s.importWs!, s.forgeAbs);
+  console.log(commit === null ? "  git: none (--no-git) — the Forge writers (forge promote, drift promote, …) need a repository with a commit" : `  git: initial commit ${commit} (no remote)`);
+  for (const n of notes) console.log(`  ${pc.yellow("note")} ${n}`);
+  // Step 5: each workspace through init's core, stopping at the first that is not started.
+  const started: string[] = [];
+  for (const w of s.workspaces) {
+    const outcome = await startSetupWorkspace(w, s.forgeAbs, s.profile, s.sync);
+    if (outcome !== "started") {
+      const rest = s.workspaces.slice(started.length + 1);
+      const init = `craftar init --forge ${shellQuote(s.forgeAbs, process.platform)} --profile ${s.profile}`;
+      const done = started.length ? ` and started ${started.join(", ")}` : "";
+      const here =
+        outcome === "refused"
+          ? `${w} has its craftar.yaml but its first sync was refused — fix the cause above, then run craftar sync there`
+          : `${w} was not started — fix the cause and run ${init} there`;
+      const after = rest.length ? `; not started: ${rest.join(", ")} — run ${init} in each` : "";
+      errorLine(`setup created the Forge${done}; ${here}${after}`);
+      return false;
+    }
+    started.push(w);
+  }
+  console.log(`next: edit the Forge (${s.forgeAbs}), commit, then craftar sync in each workspace`);
+  return true;
+}
+
+/** The import's own summary under setup's block (§4.4) — the counts, every variant and rejection, what was left to a recipe. */
+function printImportSummary(r: ImportReport, ws: string, forge: string): void {
+  console.log(`  imported ${ws} → ${forge} as profile "${r.profile}"`);
+  console.log(
+    `    ${pc.green(String(r.created.length))} created, ${pc.cyan(String(r.reused.length))} reused, ${pc.yellow(String(r.variants.length))} variants, ${pc.red(String(r.rejected.length))} rejected`,
+  );
+  for (const v of r.variants) console.log(`    ${pc.yellow("variant")} ${v.name} — ${v.reason}`);
+  for (const x of r.rejected) console.log(`    ${pc.red("rejected")} ${x.name} — ${x.reason}`);
+  for (const x of r.leftToRecipes) console.log(`    left to recipe ${x.recipe} (${slotLabel(x.slot)}): ${x.refs.join(", ")}`);
+  for (const w of r.warnings) console.log(`    ${pc.yellow("warn")} ${w}`);
+}
+
+/**
+ * Step 5: one workspace through `planInit`, `craftar.yaml` `wx` (N1's words when it appeared) and `reportStartedWorkspace` —
+ * `init`'s flags form, no clone. `not-started` when no `craftar.yaml` was written, `refused` when it was but the first sync was
+ * refused.
+ */
+async function startSetupWorkspace(root: string, forgeAbs: string, profile: string, sync: boolean): Promise<"started" | "refused" | "not-started"> {
+  let init: InitPlan;
+  try {
+    init = await planInit(root, { forge: forgeAbs, profile }, { ...load({}, "sync"), local: { doc: null, keys: [] } });
+  } catch (e) {
+    errorLine(`${root}: ${errorText(e)}`);
+    return "not-started";
+  }
+  const file = path.join(root, WORKSPACE_FILE);
+  try {
+    await fs.mkdir(root, { recursive: true });
+  } catch (e) {
+    errorLine(`${root}: ${errorText(e)}`);
+    return "not-started";
+  }
+  try {
+    await fs.writeFile(file, init.text, { flag: "wx" });
+  } catch (e) {
+    errorLine(
+      (e as NodeJS.ErrnoException).code === "EEXIST"
+        ? `${WORKSPACE_FILE} already exists in ${root} — change recipes with craftar add recipe / remove recipe, or edit it`
+        : `${root}: ${errorText(e)}`,
+    );
+    return "not-started";
+  }
+  const outcome = await reportStartedWorkspace(root, init, init.notes, { sync });
+  return outcome.kind === "refused" ? "refused" : "started";
+}
+
+/**
+ * §4.8: what a failure after the first Forge write prints — the error, the files written, and one undo. `lateFailure` is not used:
+ * before `git init` there is no repository to clean. The undo removes the topmost directory this run created, or the listed
+ * entries (and `.git`) of a directory it found empty; `rm -rf`, since git writes its objects read-only and a terminal's `rm -r`
+ * would ask about each. Paths are quoted by `shellQuote`.
+ */
+function setupLateFailure(e: SetupLateFailure, forgeAbs: string, platform: NodeJS.Platform): string {
+  const lines = [errorText(e.cause), `setup had already started writing the Forge (${forgeAbs}) when this failed:`];
+  for (const p of e.writes.written) lines.push(`  ${p}`);
+  if (e.writes.gitInit) lines.push("  .git");
+  lines.push(platform === "win32" ? "undo with (in cmd):" : "undo with:");
+  if (e.writes.createdTop !== null) {
+    const top = e.writes.createdTop;
+    lines.push(`  ${top} was created by this run — remove it to start again`);
+    lines.push(platform === "win32" ? `  rmdir /s /q ${shellQuote(top, platform)}` : `  rm -rf ${shellQuote(top, platform)}`);
+  } else {
+    // Each top-level entry setup (and git) wrote: a folder when a written path goes below it, else a file.
+    const tops = new Map<string, boolean>();
+    for (const p of e.writes.written) {
+      const [first, ...rest] = p.split("/");
+      tops.set(first!, (tops.get(first!) ?? false) || rest.length > 0);
+    }
+    if (e.writes.gitInit) tops.set(".git", true);
+    if (platform === "win32") {
+      for (const [t, dir] of tops) lines.push(`  ${dir ? "rmdir /s /q" : "del /f /q"} ${shellQuote(path.join(forgeAbs, t), platform)}`);
+    } else {
+      lines.push(`  rm -rf ${[...tops.keys()].map((t) => shellQuote(path.join(forgeAbs, t), platform)).join(" ")}`);
+    }
+  }
+  return lines.join("\n");
+}
 
 /* ---------------------------------------------------------------- repos */
 // `craftar repos` lists (the command's own action); `craftar repos clone` clones. No `repos list` (spec 37 §13.3 item 29).
@@ -3582,6 +3854,20 @@ cache
     else printPrune(result);
   });
 
+// Spec 62 §4.6: `craftar` with no arguments at all, in a terminal, on a machine with no registered workspace, ends its help with
+// the setup hint. Decided before parsing (the registry read is async, commander's help text is not); `--help` and `help` keep
+// their bytes, and a registry that does not read hides the hint.
+if (process.argv.length <= 2) {
+  const isTty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  let view: RegistryView = "absent";
+  if (isTty && !registryOff()) {
+    view = await readRegistry(craftarHome()).then(
+      (r) => (r.workspaces.length > 0 ? "registered" : "empty"),
+      () => "unreadable" as const,
+    );
+  }
+  if (showsSetupHint(isTty, view)) program.addHelpText("after", `\n${SETUP_HINT}`);
+}
 program.parseAsync().catch((e) => fail(errorText(e)));
 
 /* ---------------------------------------------------------------- helpers */

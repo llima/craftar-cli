@@ -72,6 +72,11 @@ function offerableForge(
   return { forge: entry.forge.source, ref: entry.forge.ref };
 }
 
+/** Spec 62 §14: said after a re-asked Forge answer that names no Forge — a missing directory or one with no manifest. */
+export const SETUP_FORGE_HINT = "no Forge yet? run craftar setup to create one";
+/** The two load messages that mean "no Forge in this directory" (`loadForgeSource`'s and `loadForge`'s first words). */
+const NO_FORGE_THERE = /^(Forge not found at |not a Forge: )/;
+
 /** y, yes → true; n, no → false; anything else → null. */
 export function yesNo(answer: string): boolean | null {
   const a = answer.trim().toLowerCase();
@@ -473,6 +478,8 @@ export async function askInit(
     } catch (e) {
       if (forgeWasAsked) {
         io.say((e as Error).message);
+        // Spec 62 §14 (ruled 2026-11-08): a directory that holds no Forge points a new user at craftar setup.
+        if (classifyForge(forgeValue) !== "url" && NO_FORGE_THERE.test((e as Error).message)) io.say(SETUP_FORGE_HINT);
         forgeDefault = forgeValue;
         refDefault = answeredRef ?? refDefault;
         continue forgeLoop;
