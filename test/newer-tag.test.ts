@@ -5,6 +5,8 @@ import { defaultGit, ensureTree, newerTag, parseLsRemote, type GitRunner } from 
 import { profile, recipe, rule, tmpDir } from "./helpers/forge.js";
 import { removeWithRetry } from "./helpers/fs.js";
 import { runCli } from "./helpers/cli.js";
+import { newerTagLine } from "../src/core/report.js";
+import type { ForgeOrigin, Workspace } from "../src/core/sync.js";
 import { git, remoteForge, type RemoteForge } from "./helpers/remote.js";
 
 const A = "a".repeat(40);
@@ -153,5 +155,49 @@ describe("craftar status: forge.newerTag and its informative line", () => {
     const s = older(["sync"]);
     expect(s.code).toBe(0);
     expect(s.stdout).not.toContain("newer tag");
+  });
+});
+
+describe("newerTagLine: what status prints, and only what is safe to print", () => {
+  const origin = (o: Partial<ForgeOrigin>): Workspace =>
+    ({ origin: { kind: "remote", source: "https://example.invalid/forge.git", ref: "v0.2.66", defaultBranch: null, fetched: true, fromLocalFile: false, newerTag: "v0.2.67", ...o } }) as Workspace;
+
+  it("a ref spelled refs/tags/vX.Y.Z is printed as vX.Y.Z", () => {
+    expect(newerTagLine(origin({ ref: "refs/tags/v0.2.66" }))).toBe("  newer tag on the Forge: v0.2.67 (ref is v0.2.66); set ref in craftar.yaml to move");
+  });
+
+  it("prints nothing for a ref or a tag that is not vX.Y.Z, whatever the origin holds", () => {
+    expect(newerTagLine(origin({ ref: "https://user:secret@host/x" }))).toBeNull();
+    expect(newerTagLine(origin({ newerTag: "release/9" }))).toBeNull();
+    expect(newerTagLine(origin({ newerTag: null }))).toBeNull();
+    expect(newerTagLine(origin({ ref: null }))).toBeNull();
+  });
+
+  it("without a fetch, says the time of the last fetch, or nothing when there is none", () => {
+    expect(newerTagLine(origin({ fetched: false, fetchedAt: "2026-11-08T10:00:00.000Z" }))).toBe(
+      "  newer tag on the Forge: v0.2.67 (ref is v0.2.66, as of the last fetch 2026-11-08T10:00:00.000Z); set ref in craftar.yaml to move",
+    );
+    expect(newerTagLine(origin({ fetched: false }))).toBe("  newer tag on the Forge: v0.2.67 (ref is v0.2.66, as of the last fetch); set ref in craftar.yaml to move");
+  });
+});
+
+describe("craftar status: a failed fetch reads the cached copy's tags", () => {
+  it("fetched false, the cached newerTag, the line says as of the last fetch; exit 0", async () => {
+    const { r, home } = await tagged();
+    const dir = await tmpDir("craftar-newer-ws-");
+    cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
+    await fs.writeFile(path.join(dir, "craftar.yaml"), `forge: ${r.url}\nprofile: acme\nref: v0.2.66\n`);
+    const run = (args: string[]) => runCli([...args, "--workspace", dir], { env: { CRAFTAR_HOME: home } });
+    expect(run(["status"]).code).toBe(0);
+    await fs.rename(r.bare, r.bare + ".gone");
+    cleanups.push(() => fs.rename(r.bare + ".gone", r.bare));
+    const j = run(["status", "--json"]);
+    expect(j.code).toBe(0);
+    const doc = JSON.parse(j.stdout);
+    expect(doc.warnings[0].startsWith(`Forge ${r.url} not fetched (`)).toBe(true);
+    expect([doc.forge.fetched, doc.forge.newerTag]).toEqual([false, "v0.2.67"]);
+    const t = run(["status"]);
+    expect(t.code).toBe(0);
+    expect(t.stdout.split("\n")[2]).toMatch(/^ {2}newer tag on the Forge: v0\.2\.67 \(ref is v0\.2\.66, as of the last fetch \d{4}-\d\d-\d\dT[\d:.]+Z\); set ref in craftar\.yaml to move$/);
   });
 });

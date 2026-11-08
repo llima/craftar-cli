@@ -289,7 +289,7 @@ export function resolveRef(refs: LsRemote, ref: string | null, url: string): { c
 }
 
 /** A release tag: `v` and three whole numbers, no leading zero, no pre-release or build part. */
-const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+export const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 /**
  * The highest `vX.Y.Z` tag of `refs` above the tag `ref` names, compared by number, any major; null when `ref` is not a

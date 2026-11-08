@@ -9,7 +9,7 @@ import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
 import type { PlannedFile } from "../emitters/types.js";
 import { countStates } from "./impact.js";
-import { FULL_SHA } from "./remote.js";
+import { FULL_SHA, RELEASE_TAG } from "./remote.js";
 import { resolve, type ParamLayer } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { loadForgeFor, overrideRefused, overrideSummary, unsetDeclared, unsetRefused, type OverrideConflict, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
@@ -317,7 +317,9 @@ export function newerTagLine(ws: Workspace): string | null {
   const o = ws.origin;
   if (o.newerTag === null || o.ref === null) return null;
   const ref = o.ref.replace(/^refs\/tags\//, "");
-  const asOf = o.fetched ? "" : `, as of the last fetch ${o.fetchedAt ?? "never"}`;
+  // Printed bare, so both are checked here, not only where newerTag was computed: a ref is shown only when it is vX.Y.Z.
+  if (!RELEASE_TAG.test(ref) || !RELEASE_TAG.test(o.newerTag)) return null;
+  const asOf = o.fetched ? "" : o.fetchedAt ? `, as of the last fetch ${o.fetchedAt}` : ", as of the last fetch";
   return `  newer tag on the Forge: ${o.newerTag} (ref is ${ref}${asOf}); set ref in craftar.yaml to move`;
 }
 
