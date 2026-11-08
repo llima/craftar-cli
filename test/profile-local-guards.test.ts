@@ -184,6 +184,53 @@ describe("drift promote repoints the profile's own local recipe (the user's ruli
     );
   });
 
+  async function wsWith(f: { root: string; dir: string }, name: string, config: Record<string, unknown>): Promise<string> {
+    const ws = path.join(f.root, name);
+    await makeWorkspace(ws, f.dir, { config: { profile: "acme", ...config } });
+    return ws;
+  }
+
+  it("a local recipe the workspace brings in through recipes.add is refused as the root's is (D17), the Forge untouched", async () => {
+    const s: ForgeSpec = { ...shared, profiles: [profile("acme", ["core"]), profile("globex", ["core"])] };
+    const f = await forgeWith(acmeExtra(["rule/workflow"]), s);
+    const ws = await wsWith(f, "ws-add", { recipes: { add: ["acme-extra"] } });
+    expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("recipe acme-extra reaches this workspace through recipes.add (craftar.yaml) — promote does not fork a recipe chain");
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
+  it("a local recipe citing the base that the workspace removes is refused, not left naming the base", async () => {
+    const s: ForgeSpec = { ...shared, recipes: [...shared.recipes!, recipe("acme-core", ["rule/workflow"])], profiles: [profile("acme", ["acme-core", "acme-extra"]), profile("globex", ["core"])] };
+    const f = await forgeWith(acmeExtra(["rule/workflow", "rule/style"]), s);
+    const ws = await wsWith(f, "ws-remove", { recipes: { remove: ["acme-extra"] } });
+    expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profiles/acme/recipes/acme-extra.yaml cites rule/workflow but this workspace does not resolve it — promote would leave it naming the base beside the variant");
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")("a local recipe that is a symbolic link inside the profile's folder is refused before any write", async () => {
+    const body = "name: acme-extra\ningredients:\n  - rule/workflow\n  - rule/style\n";
+    const f = await forgeWith({ "profiles/acme/kept/acme-extra.yaml": body }, shared);
+    await fs.mkdir(path.join(f.dir, "profiles/acme/recipes"), { recursive: true });
+    await fs.symlink("../kept/acme-extra.yaml", path.join(f.dir, "profiles/acme/recipes/acme-extra.yaml"));
+    git(f.dir, "add", "-A");
+    git(f.dir, "commit", "-q", "-m", "link");
+    const synced = runCli(["sync", "--workspace", f.ws]);
+    expect(synced.code, synced.stderr).toBe(0);
+    await fs.writeFile(path.join(f.ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profiles/acme/recipes/acme-extra.yaml is a symbolic link in the Forge — promote does not write through a link");
+    expect(await fs.readFile(path.join(f.dir, "profiles/acme/kept/acme-extra.yaml"), "utf8")).toBe(body);
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
   it("a local recipe git does not hold is refused, the Forge untouched", async () => {
     const f = await forgeWith(acmeExtra(["rule/workflow", "rule/style"]), shared);
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);

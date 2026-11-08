@@ -968,6 +968,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // command writes a parent. A local recipe of this profile that cites the base is repointed in Step 6 (the user's ruling of
   // 2026-11-08, spec 51 §4.5 as amended); one that reaches it only through `extends` follows the root recipe's rules there.
   if (outcome === "variant") {
+    // A local recipe of this profile that cites the base but that this workspace does not resolve (its `recipes.remove`, or a
+    // recipe nothing applies) is outside X.via, so Step 6 would not repoint it and it would keep naming the base beside the
+    // variant for every other workspace of this profile: refused, as before the ruling.
+    const unreached = localCiters(forge, [X.ref], { profile }).filter((c) => !X.via.includes(c.recipe));
+    if (unreached.length) throw new Error(`${normalized}: ${unreached.map((c) => c.file).join(", ")} cites ${X.ref} but this workspace does not resolve it — promote would leave it naming the base beside the variant; edit the Forge by hand`);
     for (const parent of familyOf(forge, profile).slice(1)) {
       const up = localCiters(forge, [X.ref], { profile: parent, viaExtends: true });
       if (up.length) throw new Error(`${normalized}: ${up.map((c) => c.file).join(", ")} reaches ${X.ref}, local to ${parent}, which ${profile} extends — no command writes a parent: edit the Forge by hand`);
@@ -1206,6 +1211,9 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // (spec 54 E2) — so it is edited in place, like Case 1 below, behind the same gate and the same proof.
       const ownLocal = forge.locals.get(profile)?.recipes.get(R);
       if (ownLocal) {
+        // Only one the profile itself resolves (its list, its block, their `extends`): one a workspace brings in through
+        // `recipes.add` is refused as the root's is (D17).
+        if (!recipesOf(forge, profile).has(R)) throw new Error(D17(R, "recipes.add (craftar.yaml)"));
         await repointLocalRecipe({ forgeDir, realForgeDir, stage, file: ownLocal.file, from: refToReplace, to: variantRef });
         editedKeys.set(ownLocal.file, ["ingredients"]);
         continue;
