@@ -288,6 +288,39 @@ export function resolveRef(refs: LsRemote, ref: string | null, url: string): { c
   return { commit, defaultBranch: null };
 }
 
+/** A release tag: `v` and three whole numbers, no leading zero, no pre-release or build part. */
+const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+/**
+ * The highest `vX.Y.Z` tag of `refs` above the tag `ref` names, compared by number, any major; null when `ref` is not a
+ * `vX.Y.Z` tag (a branch, a SHA, the default branch, another shape) or no tag is higher. The name is compared, not the
+ * commit. A name it returns matches `RELEASE_TAG`, so it is safe to print.
+ */
+export function newerTag(refs: LsRemote, ref: string | null): string | null {
+  if (ref === null) return null;
+  const qualified = /^refs\/tags\/(.+)$/.exec(ref);
+  const tag = qualified ? qualified[1] : ref;
+  if (!qualified && refs.heads.has(tag)) return null;
+  if (!refs.tags.has(tag)) return null;
+  const parts = (name: string): bigint[] | null => {
+    const m = RELEASE_TAG.exec(name);
+    return m ? [BigInt(m[1]), BigInt(m[2]), BigInt(m[3])] : null;
+  };
+  // BigInt: a number past 2^53 still compares exactly.
+  const cmp = (a: bigint[], b: bigint[]): number => {
+    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+    return 0;
+  };
+  const current = parts(tag);
+  if (current === null) return null;
+  let best: { name: string; v: bigint[] } | null = null;
+  for (const name of refs.tags.keys()) {
+    const v = parts(name);
+    if (v && cmp(v, current) > 0 && (best === null || cmp(v, best.v) > 0)) best = { name, v };
+  }
+  return best?.name ?? null;
+}
+
 /* ------------------------------------------------------------------ */
 /* The Forge cache (spec 13 §6.3) — the one place Craftar writes        */
 /* outside a workspace and a Forge on its own initiative                */
@@ -318,6 +351,8 @@ export interface CachedTree {
   fetched: boolean;
   /** ISO time of the entry's last successful fetch. */
   fetchedAt: string | null;
+  /** The highest `vX.Y.Z` tag above the requested `vX.Y.Z` tag, from this fetch or, without one, from the cache; else null. */
+  newerTag: string | null;
 }
 
 /** The remote could not be reached; `cached` says what the cache could still offer. */
@@ -381,10 +416,16 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
 
   let resolved: { commit: string; defaultBranch: string | null };
   let fetched = false;
+  let newer: string | null = null;
   if (opts.offline || cachedSha) {
     if (!haveCopy) throw new NoCachedCopyError(url);
     try {
-      resolved = cachedSha ? { commit: ref!, defaultBranch: null } : resolveRef(await cachedRefs(git, repo), ref, url);
+      if (cachedSha) resolved = { commit: ref!, defaultBranch: null };
+      else {
+        const cached = await cachedRefs(git, repo);
+        resolved = resolveRef(cached, ref, url);
+        newer = newerTag(cached, ref);
+      }
     } catch (e) {
       throw new ForgeUnavailableError((e as Error).message);
     }
@@ -397,6 +438,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
       throw new ForgeFetchError(url, (e as Error).message, haveCopy, await cachedFallback(git, repo, haveCopy, ref, url, await fetchedAt()));
     }
     resolved = resolveRef(refs, ref, url);
+    newer = newerTag(refs, ref);
     try {
       await fs.mkdir(entry, { recursive: true });
     } catch (e) {
@@ -422,7 +464,7 @@ export async function ensureTree(written: string, ref: string | null, opts: Cach
     const { busy } = await pruneTrees(entry, { ...opts, git, inUse: resolved.commit });
     if (busy) throw busy;
   }
-  return { dir, commit: resolved.commit, defaultBranch: resolved.defaultBranch, fetched, fetchedAt: await fetchedAt() };
+  return { dir, commit: resolved.commit, defaultBranch: resolved.defaultBranch, fetched, fetchedAt: await fetchedAt(), newerTag: newer };
 }
 
 async function hasCommit(git: GitRunner, repo: string, sha: string): Promise<boolean> {

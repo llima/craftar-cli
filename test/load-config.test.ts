@@ -130,6 +130,7 @@ describe("loadForgeSource (spec 28 §5.2)", () => {
       defaultBranch: null,
       fetched: false,
       fromLocalFile: false,
+      newerTag: null,
     });
     expect([...result.forge.profiles.keys()]).toEqual(["acme"]);
     // The workspace directory ws does not exist and still does not afterwards

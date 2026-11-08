@@ -502,6 +502,7 @@ export async function workspaceAgainst(
       defaultBranch: null,
       fetched: false,
       fromLocalFile: merged.fromLocalFile,
+      newerTag: null,
     },
     warnings: merged.warnings,
     merged,

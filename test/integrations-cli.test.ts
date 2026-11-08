@@ -207,8 +207,8 @@ describe("Valid schema 3 Forge — key sets and lock unchanged", () => {
 
     expect(Object.keys(st1)).toEqual(["forge", "statuses", "warnings", "unsetParams"]);
     expect(Object.keys(st2)).toEqual(["forge", "statuses", "warnings", "unsetParams"]);
-    expect(Object.keys(st1.forge)).toEqual(["kind", "source", "ref", "defaultBranch", "commit", "lockCommit", "fetched"]);
-    expect(Object.keys(st2.forge)).toEqual(["kind", "source", "ref", "defaultBranch", "commit", "lockCommit", "fetched"]);
+    expect(Object.keys(st1.forge)).toEqual(["kind", "source", "ref", "defaultBranch", "commit", "lockCommit", "fetched", "newerTag"]);
+    expect(Object.keys(st2.forge)).toEqual(["kind", "source", "ref", "defaultBranch", "commit", "lockCommit", "fetched", "newerTag"]);
 
     // The two scenarios' statuses.map should be equal
     const map1 = st1.statuses.map((x: { path: string; state: string }) => [x.path, x.state, Object.keys(x)]);

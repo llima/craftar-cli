@@ -91,7 +91,7 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
     git(r0.r.src, "push", "-q", "origin", "v1");
     await r0.r.commit({ "README.md": "later\n" });
     const j = JSON.parse(r0.run(["status", "--json"]).stdout);
-    expect(j.forge).toEqual({ kind: "remote", source: r0.r.url, ref: "v1", defaultBranch: null, commit: tagged, lockCommit: null, fetched: true });
+    expect(j.forge).toEqual({ kind: "remote", source: r0.r.url, ref: "v1", defaultBranch: null, commit: tagged, lockCommit: null, fetched: true, newerTag: null });
   });
 
   it("AC 5: unreachable — sync fails naming --offline; readers warn and use the cache; --offline works; no cache fails everywhere", async () => {
@@ -159,6 +159,7 @@ describe("cli — a remote Forge (spec 13 §4.1, §4.4, AC 1, 3, 4, 5)", () => {
       commit: null,
       lockCommit: null,
       fetched: false,
+      newerTag: null,
     });
   });
 
