@@ -105,7 +105,7 @@ describe("drift show and drift promote on a local's file (spec 51 §4.5)", () =>
     expect(await fs.readFile(path.join(f.dir, "profiles/acme/ingredients/rules/x/rule.md"), "utf8")).toBe("# x, edited by hand\n");
   });
 
-  it("drift promote's variant outcome refuses when a local recipe of this profile reaches the base", async () => {
+  it("drift promote's variant outcome: a local recipe that reaches the base only through extends of a shared root recipe follows the root's rules (D17)", async () => {
     const s: ForgeSpec = {
       ingredients: [rule("workflow", "base text\n"), rule("style", "style\n")],
       recipes: [recipe("core", ["rule/workflow", "rule/style"])],
@@ -116,6 +116,74 @@ describe("drift show and drift promote on a local's file (spec 51 §4.5)", () =>
     await fs.writeFile(path.join(f.ws, ".claude/rules/workflow.md"), "acme's own text\n");
     const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", f.ws]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("profiles/acme/recipes/acme-extra.yaml reaches rule/workflow, local to this profile — promote does not edit a local recipe");
+    expect(r.stderr).toContain("recipe core reaches this workspace through acme-extra → core — promote does not fork a recipe chain");
+    expect(git(f.dir, "status", "--porcelain")).toBe("");
+  });
+});
+
+describe("drift promote repoints the profile's own local recipe (the user's ruling, 2026-11-08)", () => {
+  const shared: ForgeSpec = {
+    ingredients: [rule("workflow", "base text\n"), rule("style", "style\n")],
+    recipes: [recipe("core", ["rule/workflow", "rule/style"])],
+    profiles: [profile("acme", ["acme-extra"]), profile("globex", ["core"])],
+  };
+  const acmeExtra = (ingredients: string[]) => ({
+    "profiles/acme/recipes/acme-extra.yaml": `# acme's own recipe\nname: acme-extra\ningredients:\n${ingredients.map((i) => `  - ${i} # kept\n`).join("")}`,
+  });
+
+  it("writes the variant and repoints the local recipe in place, comments kept; the next sync is in step", async () => {
+    const f = await forgeWith(acmeExtra(["rule/workflow", "rule/style"]), shared);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", f.ws, "--json"]);
+    expect(r.code, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.outcome).toBe("variant");
+    expect(out.promoted).toBe("rule/workflow--acme");
+    expect(await fs.readFile(path.join(f.dir, "ingredients/rules/workflow--acme/rule.md"), "utf8")).toBe("acme's own text\n");
+    expect(await fs.readFile(path.join(f.dir, "profiles/acme/recipes/acme-extra.yaml"), "utf8")).toBe(
+      "# acme's own recipe\nname: acme-extra\ningredients:\n  - rule/workflow--acme # kept\n  - rule/style # kept\n",
+    );
+    // the root recipe globex uses, and the base, are untouched
+    expect(git(f.dir, "status", "--porcelain", "--", "recipes", "ingredients/rules/workflow")).toBe("");
+    const check = runCli(["sync", "--check", "--workspace", f.ws]);
+    expect(check.code, check.stdout + check.stderr).toBe(0);
+  });
+
+  it("--dry-run lists the local recipe it would edit and writes nothing", async () => {
+    const f = await forgeWith(acmeExtra(["rule/workflow", "rule/style"]), shared);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", f.ws, "--dry-run"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("profiles/acme/recipes/acme-extra.yaml (ingredients)");
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
+  it("a root recipe acme alone resolves and its local recipe both cite the base: both are repointed", async () => {
+    const s: ForgeSpec = { ...shared, recipes: [...shared.recipes!, recipe("acme-core", ["rule/workflow"])], profiles: [profile("acme", ["acme-core", "acme-extra"]), profile("globex", ["core"])] };
+    const f = await forgeWith(acmeExtra(["rule/workflow", "rule/style"]), s);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", f.ws]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(YAML.parse(await fs.readFile(path.join(f.dir, "recipes/acme-core.yaml"), "utf8")).ingredients).toEqual(["rule/workflow--acme"]);
+    expect(YAML.parse(await fs.readFile(path.join(f.dir, "profiles/acme/recipes/acme-extra.yaml"), "utf8")).ingredients).toEqual(["rule/workflow--acme", "rule/style"]);
+    expect(runCli(["sync", "--check", "--workspace", f.ws]).code).toBe(0);
+  });
+
+  it("a local recipe git does not hold is refused, the Forge untouched", async () => {
+    const f = await forgeWith(acmeExtra(["rule/workflow", "rule/style"]), shared);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    const rec = path.join(f.dir, "profiles/acme/recipes/acme-extra.yaml");
+    const edited = (await fs.readFile(rec, "utf8")) + "# an uncommitted note\n";
+    await fs.writeFile(rec, edited);
+    await fs.writeFile(path.join(f.ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", f.ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("drift promote can only change files git can restore");
+    expect(r.stderr).toContain("profiles/acme/recipes/acme-extra.yaml is not held by git");
+    expect(await fs.readFile(rec, "utf8")).toBe(edited);
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("M profiles/acme/recipes/acme-extra.yaml");
   });
 });

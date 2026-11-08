@@ -27,6 +27,7 @@ import {
   copyForgeForProof,
   removeProofCopy,
   scratchWriteRefusal,
+  parseYaml,
 } from "../core/forge.js";
 import { readWorkspaceConfig, plan, status, readLock, unsetDeclared, type FileStatus, type OverrideConflict, type UnsetParam, type Plan, type Workspace } from "../core/sync.js";
 import { driftList, metadataEdits, METADATA_PARAM_REASON, REWORDED_REASON, INDEXED_REASON, LIST_PARAM_REASON, unmanaged } from "../core/drift.js";
@@ -78,7 +79,7 @@ import { errorText } from "../core/schema-fault.js";
 import { parseYamlText } from "../core/yaml-read.js";
 import { editYamlText } from "../core/yaml-edit.js";
 import type { WriteJournal } from "../core/unify.js";
-import { isLegacyOwner, stripForgeOnlyKeys, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
+import { isLegacyOwner, stripForgeOnlyKeys, RecipeWrittenSchema, type Ingredient, type IngredientRef, type Lock } from "../schema/index.js";
 import { deepMerge } from "../core/merge.js";
 import type { Sections } from "../schema/index.js";
 
@@ -177,6 +178,27 @@ export interface PromotePlan {
   ingredientRef: string;
   /** True when the workspace's Forge is a URL (tells CLI to say "push the Forge"). */
   isUrlForge: boolean;
+}
+
+/**
+ * Repoint a recipe of the promoting profile's own folder from the base to the new variant, in place (`editYamlText`, only
+ * `ingredients`), after `gitUnheld` holds the file, and read back through `RecipeWrittenSchema` as exactly that change.
+ */
+async function repointLocalRecipe(o: { forgeDir: string; realForgeDir: string; stage: ForgeStage; file: string; from: string; to: string }): Promise<void> {
+  const abs = path.join(o.forgeDir, ...o.file.split("/"));
+  const unheld = await gitUnheld(o.forgeDir, [abs]);
+  if (unheld.length > 0) throw new UnheldError(o.realForgeDir, unheld);
+  const raw = await o.stage.readText(abs);
+  const content = editYamlText(raw, { command: "drift promote", label: o.file, keys: ["ingredients"] }, (doc) => {
+    const seq = doc.get("ingredients", true);
+    if (!YAML.isSeq(seq)) return;
+    for (const item of seq.items) if (YAML.isScalar(item) && item.value === o.from) item.value = o.to;
+  });
+  const before = parseYaml(abs, raw, RecipeWrittenSchema, o.file);
+  const after = parseYaml(abs, content, RecipeWrittenSchema, o.file);
+  const wanted = { ...before, ingredients: before.ingredients.map((i) => (i === o.from ? o.to : i)) };
+  if (!isDeepStrictEqual(after, wanted)) throw new Error(`drift promote: ${o.file} does not read back as the repointed recipe — the Forge was left untouched`);
+  o.stage.write(abs, content);
 }
 
 /** D1–D17 messages. */
@@ -942,11 +964,10 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     flattenedSections = baseSectionNames;
   }
 
-  // Spec 51 §4.5: a new variant would leave a local recipe of this profile naming the base beside it — and, spec 54
-  // §5.12, a local recipe of a profile it extends, which no command writes.
+  // Spec 54 §5.12: a new variant would leave a local recipe of a profile this one extends naming the base beside it, and no
+  // command writes a parent. A local recipe of this profile that cites the base is repointed in Step 6 (the user's ruling of
+  // 2026-11-08, spec 51 §4.5 as amended); one that reaches it only through `extends` follows the root recipe's rules there.
   if (outcome === "variant") {
-    const citers = localCiters(forge, [X.ref], { profile, viaExtends: true });
-    if (citers.length) throw new Error(`${normalized}: ${citers.map((c) => c.file).join(", ")} reaches ${X.ref}, local to this profile — promote does not edit a local recipe; edit the Forge by hand`);
     for (const parent of familyOf(forge, profile).slice(1)) {
       const up = localCiters(forge, [X.ref], { profile: parent, viaExtends: true });
       if (up.length) throw new Error(`${normalized}: ${up.map((c) => c.file).join(", ")} reaches ${X.ref}, local to ${parent}, which ${profile} extends — no command writes a parent: edit the Forge by hand`);
@@ -1181,6 +1202,14 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (outcome === "variant") {
     // Check which recipes need to be edited or forked
     for (const R of viaRecipes) {
+      // A recipe in this profile's own folder (spec 51) is seen by this profile alone — a concrete profile is never extended
+      // (spec 54 E2) — so it is edited in place, like Case 1 below, behind the same gate and the same proof.
+      const ownLocal = forge.locals.get(profile)?.recipes.get(R);
+      if (ownLocal) {
+        await repointLocalRecipe({ forgeDir, realForgeDir, stage, file: ownLocal.file, from: refToReplace, to: variantRef });
+        editedKeys.set(ownLocal.file, ["ingredients"]);
+        continue;
+      }
       // Check if this profile owns the recipe (resolves it in its own layer)
       const profileOwns = recipesOf(forge, profile).has(R);
       // Check if any other profile resolves it, and record the first profile that does not resolve at all
