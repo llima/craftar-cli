@@ -310,7 +310,7 @@ async function planProfile(forge: Forge, profile: string, wsRoot: string): Promi
     root: wsRoot,
     config: WorkspaceConfigSchema.parse({ forge: ".", profile }),
     forge,
-    origin: { kind: "path", source: forge.root, ref: null, defaultBranch: null, fetched: false, fromLocalFile: false },
+    origin: { kind: "path", source: forge.root, ref: null, defaultBranch: null, fetched: false, fromLocalFile: false, newerTag: null },
     warnings: [],
   };
   const p = await plan(ws);

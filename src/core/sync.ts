@@ -74,6 +74,8 @@ export interface ForgeOrigin {
   fetchedAt?: string;
   /** `forge:` came from craftar.local.yaml. */
   fromLocalFile: boolean;
+  /** A remote Forge's highest `vX.Y.Z` tag above a `vX.Y.Z` tag `ref`, as the fetch (or, without one, the cache) lists them; else null. */
+  newerTag: string | null;
 }
 
 export interface Workspace {
@@ -250,7 +252,7 @@ export async function loadForgeSource(
   if (!(await exists(forgeRoot))) throw new ForgeUnavailableError(`Forge not found at ${await shownByRealPath(forgeRoot, resolveHome(opts.home))}`);
   // A path means the working tree as it is; a ref beside it is ignored, said out loud (Ruling 9).
   if (ref !== null) warnings.push(`${shownRef(ref)} is ignored: the Forge is a path (${source}), read as its working tree`);
-  const origin: ForgeOrigin = { kind: "path", source, ref: null, defaultBranch: null, fetched: false, fromLocalFile };
+  const origin: ForgeOrigin = { kind: "path", source, ref: null, defaultBranch: null, fetched: false, fromLocalFile, newerTag: null };
   return { forge: await loadForge(forgeRoot, { home: resolveHome(opts.home) }), origin, warnings };
 }
 
@@ -276,6 +278,7 @@ async function remoteTree(
     fetched: t.fetched,
     ...(t.fetchedAt ? { fetchedAt: t.fetchedAt } : {}),
     fromLocalFile,
+    newerTag: t.newerTag,
   });
   const used = (t: CachedTree) => `the cached copy at ${short(t.commit)}, fetched ${t.fetchedAt ?? "never"}`;
   if (offline) {

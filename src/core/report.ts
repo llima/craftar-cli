@@ -9,7 +9,7 @@ import { diffOps } from "./diff.js";
 import { mcpTagged } from "./drift.js";
 import type { PlannedFile } from "../emitters/types.js";
 import { countStates } from "./impact.js";
-import { FULL_SHA } from "./remote.js";
+import { FULL_SHA, RELEASE_TAG } from "./remote.js";
 import { resolve, type ParamLayer } from "./resolve.js";
 import { errorText } from "./schema-fault.js";
 import { loadForgeFor, overrideRefused, overrideSummary, unsetDeclared, unsetRefused, type OverrideConflict, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./sync.js";
@@ -79,6 +79,8 @@ export interface StatusReport {
     commit: string | null;
     lockCommit: string | null;
     fetched: boolean;
+    /** The Forge's highest `vX.Y.Z` tag above the workspace's `vX.Y.Z` tag ref; null otherwise. Fresh when `fetched`, else as of the last fetch. */
+    newerTag: string | null;
   };
   statuses: Array<Omit<FileStatus, "planned" | "escapes" | "diskHash" | "changedSinceStatus">>;
   warnings: string[];
@@ -104,6 +106,7 @@ export function statusReport(ws: Workspace, p: Plan, lock: Lock | null, statuses
       commit: ws.forge.commit,
       lockCommit: lock?.forge.commit ?? null,
       fetched: o.fetched,
+      newerTag: o.newerTag,
     },
     // The planned buffer never leaves the process: dropped here, once, for every reader of the document.
     // diskHash and changedSinceStatus are also internal fields that don't reach --json.
@@ -304,6 +307,20 @@ export function forgeLine(ws: Workspace, lock: Lock | null): string | null {
   const at = o.ref ?? `${o.defaultBranch} (default branch)`;
   const moved = lock?.forge.commit && commit && lock.forge.commit !== commit ? ` · lock ${lock.forge.commit.slice(0, 8)}` : "";
   return `  forge ${o.source} @ ${at} ${commit?.slice(0, 8) ?? "no git"}${moved}`;
+}
+
+/**
+ * `status`'s informative line when the Forge has a `vX.Y.Z` tag above the workspace's `vX.Y.Z` tag ref: never a warning,
+ * never an exit code. Without a fetch it says the tags are the last fetch's. The tag names match `vX.Y.Z`, safe to print.
+ */
+export function newerTagLine(ws: Workspace): string | null {
+  const o = ws.origin;
+  if (o.newerTag === null || o.ref === null) return null;
+  const ref = o.ref.replace(/^refs\/tags\//, "");
+  // Printed bare, so both are checked here, not only where newerTag was computed: a ref is shown only when it is vX.Y.Z.
+  if (!RELEASE_TAG.test(ref) || !RELEASE_TAG.test(o.newerTag)) return null;
+  const asOf = o.fetched ? "" : o.fetchedAt ? `, as of the last fetch ${o.fetchedAt}` : ", as of the last fetch";
+  return `  newer tag on the Forge: ${o.newerTag} (ref is ${ref}${asOf}); set ref in craftar.yaml to move`;
 }
 
 /**

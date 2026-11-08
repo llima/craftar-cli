@@ -55,7 +55,7 @@ import { renderDiff, NO_EOF_NEWLINE_MARKER } from "./core/diff.js";
 import { preferredLine, renderImportReport } from "./core/import-report.js";
 import { driftList, metadataEdits, unmanaged, type DriftRow } from "./core/drift.js";
 import { slotLabel } from "./core/integrations.js";
-import { EXAMPLE_CONTENT_HIDDEN, carriedFile, diffReport, explainFile, explainSkip, forgeLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
+import { EXAMPLE_CONTENT_HIDDEN, carriedFile, diffReport, explainFile, explainSkip, forgeLine, newerTagLine, nextSyncLine, notProduced, orphanDriftBody, statusPath, statusReport, targetsReport, withEscapeLine } from "./core/report.js";
 import { diffIngredients, listVariants, profileOf, type Distance, type IngredientDiff } from "./core/variants.js";
 import { assertNoLinkOnPath, exists, gitDirty, gitIgnored, gitIsRepo, gitTracked, gitUnheld, ignoredPaths, loadForge, realpathOfNearest, cannotResolve, unheldMessage, type UnheldPath } from "./core/forge.js";
 import { writeForgeFile } from "./core/forge-write.js";
@@ -115,7 +115,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.8.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.9.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -230,7 +230,7 @@ program
 /* ---------------------------------------------------------------- status */
 program
   .command("status")
-  .description("Show what sync would do: new, update, drift, orphan, collision; exits 1 when a declared parameter a file cites has no value, or when AGENTS.md is over an explicit budget; exits 1 when a workspace path leaves through a symbolic link")
+  .description("Show what sync would do: new, update, drift, orphan, collision; names a newer vX.Y.Z tag of a remote Forge pinned to a vX.Y.Z tag; exits 1 when a declared parameter a file cites has no value, or when AGENTS.md is over an explicit budget; exits 1 when a workspace path leaves through a symbolic link")
   .option("--workspace <dir>", "workspace root", ".")
   .option("--json", "machine-readable output", false)
   .option("--offline", "use the cached copy of a remote Forge, without fetching", false)
@@ -248,7 +248,7 @@ program
       if (unset.length || agentsMdOverBudget(p) || kiroResourcesUnplanned(p)?.length || escapingRows(st).length || p.overrideConflicts.length) process.exitCode = 1;
       return;
     }
-    printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock));
+    printStatus(st, p.warnings, ws.config.profile, p.resolution.recipes, false, forgeLine(ws, lock), newerTagLine(ws));
     if (refusalBlock(unset)) process.exitCode = 1;
     if (overrideBlock(p)) process.exitCode = 1;
     if (escapeBlock(st)) process.exitCode = 1;
@@ -4069,11 +4069,13 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-function printStatus(st: FileStatus[], warnings: string[], profile: string, recipes: string[], compact = false, forge: string | null = null) {
+function printStatus(st: FileStatus[], warnings: string[], profile: string, recipes: string[], compact = false, forge: string | null = null, newer: string | null = null) {
   const counts: Record<string, number> = {};
   for (const s of st) counts[s.state] = (counts[s.state] ?? 0) + 1;
   console.log(pc.bold(`craftar status — profile ${profile} · recipes ${recipes.join(" → ")}`));
   if (forge) console.log(forge);
+  // `status` only: information, never a warning or an exit code; the other callers pass none.
+  if (newer) console.log(newer);
   console.log(
     "  " +
       Object.entries(counts)

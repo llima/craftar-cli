@@ -6,6 +6,7 @@ import { runCli } from "./helpers/cli.js";
 import { profile, recipe, scenario, writeFiles, type IngredientSpec } from "./helpers/forge.js";
 import { atLeastWin32 } from "./helpers/timeouts.js";
 import { skipResidue, withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
+import { withoutNewerTag } from "./helpers/newer-tag-delta.js";
 
 /**
  * Spec 51 §10: pin what a Forge below `schema: 8` gets today, BEFORE any source change, so the local layer can
@@ -209,7 +210,7 @@ describe("profile-local=off baseline pin (spec 51 §10)", () => {
     ignoredSeen = 0;
     const pinned = JSON.parse(await fs.readFile(PIN_FILE, "utf8"));
     expect(skipResidue(observed, pinned)).toEqual([]);
-    expect(withoutCoveredSkip(withoutIgnored(observed))).toEqual(withoutCoveredSkip(pinned));
+    expect(withoutNewerTag(withoutCoveredSkip(withoutIgnored(observed)))).toEqual(withoutNewerTag(withoutCoveredSkip(pinned)));
     // Since spec 51: the folder this Forge does not read is said, on every surface that warns.
     expect(ignoredSeen).toBeGreaterThan(0);
   });

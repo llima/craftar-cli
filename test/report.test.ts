@@ -41,8 +41,8 @@ describe("statusReport", () => {
     const { ws, p, lock, st } = await loaded(kept(await eightStates()));
     const r = statusReport(ws, p, lock, st);
     expect(Object.keys(r)).toEqual(["forge", "statuses", "warnings", "unsetParams"]);
-    expect(r.forge).toEqual({ kind: "path", source: "../forge", ref: null, defaultBranch: null, commit: null, lockCommit: null, fetched: false });
-    expect(Object.keys(r.forge)).toEqual(["kind", "source", "ref", "defaultBranch", "commit", "lockCommit", "fetched"]);
+    expect(r.forge).toEqual({ kind: "path", source: "../forge", ref: null, defaultBranch: null, commit: null, lockCommit: null, fetched: false, newerTag: null });
+    expect(Object.keys(r.forge)).toEqual(["kind", "source", "ref", "defaultBranch", "commit", "lockCommit", "fetched", "newerTag"]);
     expect(r.statuses).toHaveLength(8);
     for (const s of r.statuses) expect(Object.hasOwn(s, "planned")).toBe(false);
     expect(Object.keys(r.statuses[2])).toEqual(["path", "state", "target", "ingredient", "lock"]);

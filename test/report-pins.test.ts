@@ -49,7 +49,7 @@ describe("pins — a workspace holding one file in each state", () => {
     expect(r.stdout).toBe(
       JSON.stringify(
         {
-          forge: { kind: "path", source: "../forge", ref: null, defaultBranch: null, commit: null, lockCommit: null, fetched: false },
+          forge: { kind: "path", source: "../forge", ref: null, defaultBranch: null, commit: null, lockCommit: null, fetched: false, newerTag: null },
           statuses: [
             row("adopted", "adopt"),
             row("clash", "collision"),
