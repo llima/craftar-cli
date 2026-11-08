@@ -46,7 +46,7 @@ import { mcpWriters } from "./core/write-actions.js";
 import { pruneCache, type PruneResult as CachePruneResult } from "./core/cache.js";
 import { resolveHome } from "./core/home-lock.js";
 import { loadWorkspace, loadForgeFor, readConfigFrom, loadForgeSource, readWorkspaceConfig, plan, readLock, status, unsetDeclared, unsetRefusal, overrideRefusal, agentsMdOverBudget, agentsMdRefusal, kiroResourcesUnplanned, kiroResourcesRefusal, orphanReason, primaryOrphan, GEMINI_ORPHAN_WHY, resolveForge, resolveForgeSource, WORKSPACE_FILE, LOCAL_FILE, type ApplyResult, type FetchMode, type FileState, type FileStatus, type LoadOptions, type MergedConfig, type Plan, type SectionLayer, type UnsetParam, type Workspace } from "./core/sync.js";
-import type { Lock, Registry } from "./schema/index.js";
+import type { Lock, Registry, Target } from "./schema/index.js";
 import { sectionKey, type ParamLayer } from "./core/resolve.js";
 import { catalogueContext, listRecipes, listIngredients, checkType, overriddenRoot, withLoadWarnings, type CatalogueContext, type ContextSource, type IngredientEntry } from "./core/catalogue.js";
 import { canonicalValue } from "./core/sections.js";
@@ -90,6 +90,8 @@ import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type Ini
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
+import { derivedName, rulesReachNoFile, setupForgeFiles, setupSchema, STARTER_REACHES_NO_FILE } from "./core/setup.js";
+import { checkGitIdentity, checkSetupFlags, checkSetupPlaces, commitSetupForge, GIT_NEEDED, holdsClaude, parseTargets, proveSetupForge, SetupLateFailure, writeSetupForge, type ForgeDirState, type SetupWrites } from "./core/setup-write.js";
 import type { Eol } from "./core/text.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
 import { syncWorkspace, editRecipes, confirmWrites, confirmSettings, DISCARDED_ORPHAN } from "./core/write-actions.js";
@@ -697,6 +699,226 @@ program
       again();
     },
   );
+
+/* ---------------------------------------------------------------- setup */
+// Spec 62: a new Forge from scratch (or from an existing .claude/), one initial commit, workspaces started through init's core.
+program
+  .command("setup")
+  .description(
+    "Create a new Forge — craftar.forge.yaml, a first profile and, by default, a starter rule — make it a git repository with one initial commit (no remote, never pushed), then start workspaces on it; a workspace holding .claude/ can fill the Forge by import instead; in a terminal, asks what the flags do not give; never touches an existing Forge",
+  )
+  .option("--forge-dir <dir>", "where the new Forge is created: a directory that does not exist or is empty; asked for in a terminal when omitted")
+  .option("--name <name>", "the Forge's name (default: the directory's name, lower-cased)")
+  .option("--profile <name>", "the first profile's name; asked for in a terminal when omitted")
+  .option("--targets <a,b>", "the profile's targets (claude-code, kiro, agents-md, cursor, copilot, agent-skills, codex, antigravity, opencode); default claude-code; the Forge declares the lowest schema they need")
+  .option("--starter", "write a starter rule and the recipe base that lists it (the default)")
+  .option("--no-starter", "write the skeleton only")
+  .option("--git", "make the Forge a git repository with one initial commit (the default)")
+  .option("--no-git", "write the files only, with no repository")
+  .option("--workspace <dir>", "a workspace to start on the new Forge (repeatable); none starts no workspace", collect, [])
+  .option("--import", "fill the Forge by importing the --workspace that holds .claude/")
+  .option("--no-import", "start a --workspace that holds .claude/ from the starter instead")
+  .option("--no-sync", "write each workspace's craftar.yaml only, and say what the first sync would do")
+  .action(async (o: { forgeDir?: string; name?: string; profile?: string; targets?: string; starter?: boolean; git?: boolean; workspace: string[]; import?: boolean; sync: boolean }) => {
+    await setupCommand(o);
+  });
+
+interface SetupOptions {
+  forgeDir?: string;
+  name?: string;
+  profile?: string;
+  targets?: string;
+  starter?: boolean;
+  git?: boolean;
+  workspace: string[];
+  import?: boolean;
+  sync: boolean;
+}
+
+async function setupCommand(o: SetupOptions): Promise<void> {
+  const isTTY = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const flagsForm = o.forgeDir !== undefined && o.profile !== undefined;
+  if (!flagsForm && !isTTY) {
+    fail("setup: --forge-dir and --profile are required when craftar setup does not run in a terminal — pass them, or run craftar setup in a terminal to be asked");
+  }
+  if (!flagsForm) fail("setup: the interactive mode is not built yet — pass --forge-dir and --profile");
+  const targets = o.targets === undefined ? undefined : parseTargets(o.targets);
+  try {
+    checkSetupFlags({ forgeDir: o.forgeDir!, name: o.name, profile: o.profile!, targets, workspaces: o.workspace, import: o.import }, process.platform);
+  } catch (e) {
+    fail(errorText(e));
+  }
+  await runSetup({
+    forgeAbs: path.resolve(o.forgeDir!),
+    name: o.name,
+    profile: o.profile!,
+    targets: (targets ?? ["claude-code"]) as Target[],
+    starter: o.starter !== false,
+    git: o.git !== false,
+    workspaces: o.workspace.map((w) => path.resolve(w)),
+    import: o.import,
+    sync: o.sync,
+    isTTY,
+  });
+}
+
+interface SetupRun {
+  forgeAbs: string;
+  name?: string;
+  profile: string;
+  targets: Target[];
+  starter: boolean;
+  git: boolean;
+  workspaces: string[];
+  import?: boolean;
+  sync: boolean;
+  isTTY: boolean;
+}
+
+async function runSetup(s: SetupRun): Promise<void> {
+  const home = craftarHome();
+  let state: ForgeDirState;
+  try {
+    state = await checkSetupPlaces(s.forgeAbs, s.workspaces, home, process.platform);
+  } catch (e) {
+    fail(errorText(e));
+  }
+  // S8, S9: the import branch.
+  const withClaude: string[] = [];
+  for (const w of s.workspaces) if (await holdsClaude(w)) withClaude.push(w);
+  if (withClaude.length > 0 && s.import === undefined) {
+    fail(`${withClaude[0]} holds .claude/ — pass --import to bring it into the new Forge, or --no-import to start it from the starter`);
+  }
+  if (s.import === true && withClaude.length === 0) fail("--import needs a --workspace that holds .claude/");
+  if (s.import === true && withClaude.length > 1) fail("setup imports one workspace — import the others afterwards with craftar import");
+  const importWs = s.import === true ? withClaude[0]! : null;
+  // S6: git and an identity, before any write.
+  if (s.git) {
+    if ((await findGit(process.env)) === null) fail(GIT_NEEDED);
+    await checkGitIdentity(s.forgeAbs, process.env).catch((e) => fail(errorText(e)));
+  }
+  const name = s.name ?? derivedName(s.forgeAbs);
+  const starter = importWs === null && s.starter;
+  const all = setupForgeFiles({ name, profile: s.profile, targets: s.targets, starter });
+  // The import branch writes the manifest and the README; import writes the profile and the rest (§4.4).
+  const files = importWs === null ? all : all.filter((f) => f.path === "craftar.forge.yaml" || f.path === "README.md");
+  const notes: string[] = [];
+  if (starter && rulesReachNoFile(s.targets)) notes.push(STARTER_REACHES_NO_FILE);
+  // S10: the proof, on a scratch directory (the starter or skeleton branch).
+  if (importWs === null) await proveSetupForge(files, s.profile, s.forgeAbs, { home }).catch((e) => fail(errorText(e)));
+  // Step 2: the Forge, created `wx`.
+  const writes: SetupWrites = { createdDir: false, written: [], gitInit: false };
+  let commit: string | null = null;
+  try {
+    await writeSetupForge(s.forgeAbs, state, files, writes);
+    if (importWs !== null) {
+      // Step 3: import's core, no --write-config; then the Forge it wrote must load and plan the workspace.
+      try {
+        const r = await importClaudeCode({ workspaceRoot: importWs, forgeRoot: s.forgeAbs, profileName: s.profile });
+        writes.written.push(...(r.forgeWrites ?? []).filter((p) => !writes.written.includes(p)));
+        for (const w of r.warnings) notes.push(w);
+        await planInit(importWs, { forge: s.forgeAbs, profile: s.profile }, { ...load({}, "read"), local: { doc: null, keys: [] } });
+      } catch (e) {
+        throw new SetupLateFailure(e, writes);
+      }
+    }
+    if (s.git) commit = await commitSetupForge(s.forgeAbs, writes.written, writes, { env: process.env, stdinIsTty: process.stdin.isTTY === true });
+  } catch (e) {
+    if (e instanceof SetupLateFailure) fail(setupLateFailure(e, s.forgeAbs, state, process.platform));
+    throw e;
+  }
+  const schema = setupSchema(importWs === null ? s.targets : ["claude-code"]);
+  console.log(pc.bold(`craftar setup — created Forge ${name} at ${s.forgeAbs} (schema ${schema})`));
+  console.log(`  wrote ${writes.written.join(", ")}`);
+  console.log(commit === null ? "  git: none (--no-git) — the Forge writers (forge promote, drift promote, …) need a repository with a commit" : `  git: initial commit ${commit} (no remote)`);
+  for (const n of notes) console.log(`  ${pc.yellow("note")} ${n}`);
+  // Step 5: each workspace through init's core.
+  let failed = false;
+  for (const w of s.workspaces) {
+    if (failed) break;
+    failed = await startSetupWorkspace(w, s.forgeAbs, s.profile, s.sync);
+  }
+  console.log(`next: edit the Forge (${s.forgeAbs}), commit, then craftar sync in each workspace`);
+  if (failed) process.exitCode = 1;
+}
+
+/** Step 5: one workspace through `planInit`, `craftar.yaml` `wx` and the first sync — `init`'s flags form, no clone. True when refused. */
+async function startSetupWorkspace(root: string, forgeAbs: string, profile: string, sync: boolean): Promise<boolean> {
+  let init;
+  try {
+    init = await planInit(root, { forge: forgeAbs, profile }, { ...load({}, "sync"), local: { doc: null, keys: [] } });
+  } catch (e) {
+    errorLine(`${root}: ${errorText(e)}`);
+    return true;
+  }
+  const file = path.join(root, WORKSPACE_FILE);
+  await fs.mkdir(root, { recursive: true });
+  try {
+    await fs.writeFile(file, init.text, { flag: "wx" });
+  } catch (e) {
+    errorLine(`${root}: ${errorText(e)}`);
+    return true;
+  }
+  const p = init.plan;
+  console.log(pc.bold(`craftar init — wrote ${WORKSPACE_FILE} in ${root}`));
+  console.log(`  ${initLine(init)}`);
+  for (const n of init.notes) console.log(`  note ${n}`);
+  const unset = unsetDeclared(p);
+  const refused = unset.length > 0 || escapingRows(init.statuses).length > 0 || p.overrideConflicts.length > 0;
+  if (!sync) {
+    console.log(nextSyncLine(init.statuses, unset, p.overrideConflicts));
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    return false;
+  }
+  if (refused) {
+    for (const w of p.warnings) console.log(`  ${pc.yellow("warn")} ${w}`);
+    refusalBlock(unset, { thenSync: true });
+    overrideBlock(p, { thenSync: true });
+    escapeBlock(init.statuses, { thenSync: true });
+    return true;
+  }
+  await applyAndReport(init.ws, p, init.statuses, init.lock);
+  return false;
+}
+
+/**
+ * §4.8: what a failure after the first Forge write prints — the error, the files written, and one undo. `lateFailure` is not used:
+ * before `git init` there is no repository to clean. The undo removes the directory setup made, or the listed paths (and `.git`)
+ * of one it found empty; paths are quoted by `shellQuote`.
+ */
+function setupLateFailure(e: SetupLateFailure, forgeAbs: string, state: ForgeDirState, platform: NodeJS.Platform): string {
+  const lines = [errorText(e.cause), `setup had already started writing the Forge (${forgeAbs}) when this failed:`];
+  for (const p of e.writes.written) lines.push(`  ${p}`);
+  if (e.writes.gitInit) lines.push("  .git");
+  lines.push("undo with:");
+  if (state === "absent" && e.writes.createdDir) {
+    lines.push(`  the Forge directory ${forgeAbs} was created by this run — remove it to start again`);
+    lines.push(platform === "win32" ? `  rmdir /s /q ${shellQuote(forgeAbs, platform)}` : `  rm -r ${shellQuote(forgeAbs, platform)}`);
+  } else {
+    // Each top-level entry setup (and git) wrote: a folder when a written path goes below it, else a file.
+    const tops = new Map<string, boolean>();
+    for (const p of e.writes.written) {
+      const [top, ...rest] = p.split("/");
+      tops.set(top!, (tops.get(top!) ?? false) || rest.length > 0);
+    }
+    if (e.writes.gitInit) tops.set(".git", true);
+    if (platform === "win32") {
+      for (const [t, dir] of tops) lines.push(`  ${dir ? "rmdir /s /q" : "del /q"} ${shellQuote(path.join(forgeAbs, t), platform)}`);
+    } else {
+      lines.push(`  rm -r ${[...tops.keys()].map((t) => shellQuote(path.join(forgeAbs, t), platform)).join(" ")}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * A path quoted for the shell the undo line is pasted into (§4.8): POSIX single quotes, a `'` written `'\''`, so `$`, a
+ * backtick, `\` and `"` stay literal; win32 double quotes (S1 refuses `"` and `%` there).
+ */
+function shellQuote(p: string, platform: NodeJS.Platform): string {
+  if (platform === "win32") return `"${p}"`;
+  return `'${p.replace(/'/g, `'\\''`)}'`;
+}
 
 /* ---------------------------------------------------------------- repos */
 // `craftar repos` lists (the command's own action); `craftar repos clone` clones. No `repos list` (spec 37 §13.3 item 29).
