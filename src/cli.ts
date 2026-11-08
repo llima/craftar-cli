@@ -91,7 +91,7 @@ import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type Desti
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
 import { askSetup, confirmSetup, setupAgainLine } from "./core/setup-flow.js";
-import { derivedName, rulesReachNoFile, setupForgeFiles, setupSchema, STARTER_REACHES_NO_FILE } from "./core/setup.js";
+import { derivedName, rulesReachNoFile, setupForgeFiles, setupSchema, SETUP_HINT, showsSetupHint, STARTER_REACHES_NO_FILE, type RegistryView } from "./core/setup.js";
 import { checkGitIdentity, checkSetupFlags, checkSetupPlaces, commitSetupForge, GIT_NEEDED, holdsClaude, parseTargets, proveSetupForge, SetupLateFailure, writeSetupForge, type ForgeDirState, type SetupWrites } from "./core/setup-write.js";
 import type { Eol } from "./core/text.js";
 import { recipeDiffLine, type RecipeOp } from "./core/recipe-edit.js";
@@ -3821,6 +3821,20 @@ cache
     else printPrune(result);
   });
 
+// Spec 62 §4.6: `craftar` with no arguments at all, in a terminal, on a machine with no registered workspace, ends its help with
+// the setup hint. Decided before parsing (the registry read is async, commander's help text is not); `--help` and `help` keep
+// their bytes, and a registry that does not read hides the hint.
+if (process.argv.length <= 2) {
+  const isTty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+  let view: RegistryView = "absent";
+  if (isTty && !registryOff()) {
+    view = await readRegistry(craftarHome()).then(
+      (r) => (r.workspaces.length > 0 ? "registered" : "empty"),
+      () => "unreadable" as const,
+    );
+  }
+  if (showsSetupHint(isTty, view)) program.addHelpText("after", `\n${SETUP_HINT}`);
+}
 program.parseAsync().catch((e) => fail(errorText(e)));
 
 /* ---------------------------------------------------------------- helpers */

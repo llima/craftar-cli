@@ -196,3 +196,13 @@ describe.skipIf(process.platform === "win32")("craftar setup — a failure after
     await expect(fs.access(forge)).rejects.toThrow();
   }, T);
 });
+
+describe("craftar with no arguments (§4.6)", () => {
+  it("off a terminal prints commander's help with no setup hint, exit code unchanged", async () => {
+    const { run } = await sandbox();
+    const r = run([]);
+    expect(r.code).toBe(1);
+    expect(r.stdout + r.stderr).toContain("setup [options]");
+    expect(r.stdout + r.stderr).not.toContain("new here?");
+  }, T);
+});
