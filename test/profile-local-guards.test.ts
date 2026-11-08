@@ -210,7 +210,50 @@ describe("drift promote repoints the profile's own local recipe (the user's ruli
     await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "acme's own text\n");
     const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("profiles/acme/recipes/acme-extra.yaml cites rule/workflow but this workspace does not resolve it — promote would leave it naming the base beside the variant");
+    expect(r.stderr).toContain("profiles/acme/recipes/acme-extra.yaml reaches rule/workflow but this workspace does not resolve it — promote would leave it naming the base beside the variant");
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
+  it("a local recipe that reaches the base only through extends, removed by this workspace, is refused — no fork that brings the base back elsewhere", async () => {
+    const s: ForgeSpec = { ...shared, profiles: [profile("acme", ["core", "acme-extra"]), profile("globex", ["core"])] };
+    const f = await forgeWith({ "profiles/acme/recipes/acme-extra.yaml": YAML.stringify({ name: "acme-extra", extends: ["core"], ingredients: ["rule/style"] }) }, s);
+    const ws = await wsWith(f, "ws-remove-ext", { recipes: { remove: ["acme-extra"] } });
+    expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profiles/acme/recipes/acme-extra.yaml reaches rule/workflow but this workspace does not resolve it — promote would leave it naming the base beside the variant");
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
+  it("a profile that does not resolve on its own cannot have its local recipe repointed (fail closed)", async () => {
+    const s: ForgeSpec = { ...shared, profiles: [profile("acme", ["missing"]), profile("globex", ["core"])] };
+    const f = await forgeWith(acmeExtra(["rule/workflow"]), s);
+    const ws = await wsWith(f, "ws-unresolved", { recipes: { remove: ["missing"], add: ["acme-extra"] } });
+    expect(runCli(["sync", "--workspace", ws]).code).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("profile acme does not resolve on its own, so promote cannot tell whether acme-extra is its own recipe");
+    expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
+
+  it("a local recipe of the child that its abstract parent lists by name is the family's: refused as D17_PARENT (schema 13)", async () => {
+    const s: ForgeSpec = {
+      ingredients: shared.ingredients,
+      recipes: shared.recipes,
+      profiles: [profile("base", ["kidrec"], ["claude-code"], { abstract: true }), profile("kid", [], ["claude-code"], { extends: "base" }), profile("globex", ["core"])],
+    };
+    const f = await forgeWith({ "profiles/kid/recipes/kidrec.yaml": YAML.stringify({ name: "kidrec", ingredients: ["rule/workflow"] }) }, s);
+    await fs.writeFile(path.join(f.dir, "craftar.forge.yaml"), YAML.stringify({ name: "test-forge", schema: 13 }));
+    git(f.dir, "commit", "-q", "-am", "schema 13");
+    const ws = await wsWith(f, "ws-kid", { profile: "kid" });
+    const synced = runCli(["sync", "--workspace", ws]);
+    expect(synced.code, synced.stderr).toBe(0);
+    await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "kid's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("recipe kidrec reaches kid through profile base, which it extends — forking it would edit base's recipes, and no command writes a parent");
     expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
   });
 

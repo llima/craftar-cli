@@ -971,8 +971,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     // A local recipe of this profile that cites the base but that this workspace does not resolve (its `recipes.remove`, or a
     // recipe nothing applies) is outside X.via, so Step 6 would not repoint it and it would keep naming the base beside the
     // variant for every other workspace of this profile: refused, as before the ruling.
-    const unreached = localCiters(forge, [X.ref], { profile }).filter((c) => !X.via.includes(c.recipe));
-    if (unreached.length) throw new Error(`${normalized}: ${unreached.map((c) => c.file).join(", ")} cites ${X.ref} but this workspace does not resolve it — promote would leave it naming the base beside the variant; edit the Forge by hand`);
+    // Through `extends` too: a local recipe this workspace removes that extends a root recipe citing the base would bring the
+    // base back beside the variant in every other workspace of this profile. One this workspace resolves is Step 6's (a repoint,
+    // or D17 through `extendedByOther`).
+    const unreached = localCiters(forge, [X.ref], { profile, viaExtends: true }).filter((c) => !p0.resolution.recipes.includes(c.recipe));
+    if (unreached.length) throw new Error(`${normalized}: ${unreached.map((c) => c.file).join(", ")} reaches ${X.ref} but this workspace does not resolve it — promote would leave it naming the base beside the variant; edit the Forge by hand`);
     for (const parent of familyOf(forge, profile).slice(1)) {
       const up = localCiters(forge, [X.ref], { profile: parent, viaExtends: true });
       if (up.length) throw new Error(`${normalized}: ${up.map((c) => c.file).join(", ")} reaches ${X.ref}, local to ${parent}, which ${profile} extends — no command writes a parent: edit the Forge by hand`);
@@ -1204,6 +1207,22 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // Build a map of recipes the profile's integrations block selects: recipe → slot
   const selectedBy = new Map(effectiveProfile(forge, profileObj).selected.map((s) => [s.recipe, s.slot]));
 
+  // Spec 54 §5.9: a recipe a parent reaches — written in its list, selected by its integrations block, or extended from
+  // either — is the family's: every case would edit it or the parent's list, and no command writes a parent. The child
+  // listing it too, or a workspace adding it, changes nothing about what the parent brings. Decided before the cases, so
+  // a parent with one child is refused too; a parent whose recipes do not resolve fails closed.
+  const refuseViaParent = (R: string): void => {
+    const view = forgeFor(forge, profile);
+    const viaParent = familyOf(forge, profile).slice(1).find((q) => {
+      try {
+        return recipeOrder(view, effectiveProfile(forge, forge.profiles.get(q)!).recipes, `profile ${q}`).includes(R);
+      } catch (e) {
+        throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
+      }
+    });
+    if (viaParent !== undefined) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
+  };
+
   if (outcome === "variant") {
     // Check which recipes need to be edited or forked
     for (const R of viaRecipes) {
@@ -1211,9 +1230,16 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // (spec 54 E2) — so it is edited in place, like Case 1 below, behind the same gate and the same proof.
       const ownLocal = forge.locals.get(profile)?.recipes.get(R);
       if (ownLocal) {
-        // Only one the profile itself resolves (its list, its block, their `extends`): one a workspace brings in through
-        // `recipes.add` is refused as the root's is (D17).
-        if (!recipesOf(forge, profile).has(R)) throw new Error(D17(R, "recipes.add (craftar.yaml)"));
+        refuseViaParent(R);
+        // Only one the profile itself resolves (its list, its block, their `extends`): one a workspace brings in (`recipes.add`,
+        // or the `extends` of a recipe it adds) is refused as the root's is (D17). A profile that does not resolve on its own
+        // cannot say, so it is refused too (fail closed).
+        const own = resolvedRecipes(forge, profile);
+        if (own === null) throw new Error(`${normalized}: profile ${profile} does not resolve on its own, so promote cannot tell whether ${R} is its own recipe — fix the profile, or edit the Forge by hand`);
+        if (!own.has(R)) {
+          const chain = (ws.config.recipes?.add ?? []).includes(R) ? "recipes.add (craftar.yaml)" : (findExtendsChain(forgeFor(forge, profile), p0.resolution.recipes, R) ?? R);
+          throw new Error(D17(R, chain));
+        }
         await repointLocalRecipe({ forgeDir, realForgeDir, stage, file: ownLocal.file, from: refToReplace, to: variantRef });
         editedKeys.set(ownLocal.file, ["ingredients"]);
         continue;
@@ -1254,21 +1280,8 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // Check if any other resolved recipe extends R
       const extendedByOther = isExtendedByOtherResolved(forgeFor(forge, profile), p0.resolution.recipes, R);
 
-      // Spec 54 §5.9: a recipe a parent reaches — written in its list, selected by its integrations block, or extended from
-      // either — is the family's: every case would edit it or the parent's list, and no command writes a parent. The child
-      // listing it too, or a workspace adding it, changes nothing about what the parent brings. Decided before the cases, so
-      // a parent with one child is refused too; a parent whose recipes do not resolve fails closed.
-      {
-        const view = forgeFor(forge, profile);
-        const viaParent = familyOf(forge, profile).slice(1).find((q) => {
-          try {
-            return recipeOrder(view, effectiveProfile(forge, forge.profiles.get(q)!).recipes, `profile ${q}`).includes(R);
-          } catch (e) {
-            throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
-          }
-        });
-        if (viaParent !== undefined) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
-      }
+      // Spec 54 §5.9: decided before the cases (the own-local branch above asks it first too).
+      refuseViaParent(R);
 
       if (profileOwns && !othersMay) {
         // Case 1: profile owns it alone — edit recipe in place

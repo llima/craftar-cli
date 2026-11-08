@@ -65,7 +65,7 @@ describe("docs-block-pins — a profile's docs: block changes no planned byte (s
       const { p } = await planned(docs);
       const pin = JSON.parse(await fs.readFile(PIN, "utf8"));
       expect(skipResidue(p.warnings, pin)).toEqual([]);
-    expect(withoutCoveredSkip({ files: hashes(p), warnings: p.warnings })).toEqual(withoutCoveredSkip(pin));
+      expect(withoutCoveredSkip({ files: hashes(p), warnings: p.warnings })).toEqual(withoutCoveredSkip(pin));
     });
   }
 
