@@ -128,12 +128,18 @@ function reshapeServer(key: string, raw: unknown, ctx: EmitBase): Record<string,
     }
     out.url = url;
     if (isNonEmptyObject(s.headers)) out.headers = s.headers;
+    // Nothing dropped silently (spec 63 §18.3 item 8): an empty object and null lose nothing; anything else is named, never quoted.
+    else if (s.headers !== undefined && s.headers !== null && !isEmptyObject(s.headers)) ctx.warn(`opencode: MCP server "${key}": headers is not an object; dropped`);
     used.add("url").add("headers");
     if (type === "sse") ctx.warn(`opencode: MCP server "${key}": an sse server was not measured against OpenCode, which speaks Streamable HTTP`);
   }
   for (const k of COPIED_KEYS) if (s[k] !== undefined) out[k] = s[k];
   for (const k of Object.keys(s)) if (!used.has(k)) ctx.warn(`opencode: MCP server "${key}": key ${JSON.stringify(k)} has no OpenCode field; dropped`);
   return out;
+}
+
+function isEmptyObject(v: unknown): boolean {
+  return v !== null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0;
 }
 
 function isNonEmptyObject(v: unknown): v is Record<string, unknown> {
