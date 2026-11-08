@@ -1211,7 +1211,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   // either — is the family's: every case would edit it or the parent's list, and no command writes a parent. The child
   // listing it too, or a workspace adding it, changes nothing about what the parent brings. Decided before the cases, so
   // a parent with one child is refused too; a parent whose recipes do not resolve fails closed.
-  const refuseViaParent = (R: string): void => {
+  const refuseViaParent = (R: string, local = false): void => {
     const view = forgeFor(forge, profile);
     const viaParent = familyOf(forge, profile).slice(1).find((q) => {
       try {
@@ -1220,7 +1220,11 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         throw new Error(`${normalized}: the recipes of profile ${q}, which ${profile} extends, do not resolve (${errorText(e)}) — fix the Forge and re-run`);
       }
     });
-    if (viaParent !== undefined) throw new Error(D17_PARENT(normalized, R, viaParent, profile));
+    if (viaParent === undefined) return;
+    // A recipe of this profile's own folder that a parent lists by name: the repoint would edit this profile's file only,
+    // but the parent's list is the family's, and no command writes a parent.
+    if (local) throw new Error(`${normalized}: recipe ${R} is local to ${profile}, and profile ${viaParent}, which it extends, lists it — no command writes a parent: edit the Forge by hand`);
+    throw new Error(D17_PARENT(normalized, R, viaParent, profile));
   };
 
   if (outcome === "variant") {
@@ -1230,7 +1234,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // (spec 54 E2) — so it is edited in place, like Case 1 below, behind the same gate and the same proof.
       const ownLocal = forge.locals.get(profile)?.recipes.get(R);
       if (ownLocal) {
-        refuseViaParent(R);
+        refuseViaParent(R, true);
         // Only one the profile itself resolves (its list, its block, their `extends`): one a workspace brings in (`recipes.add`,
         // or the `extends` of a recipe it adds) is refused as the root's is (D17). A profile that does not resolve on its own
         // cannot say, so it is refused too (fail closed).

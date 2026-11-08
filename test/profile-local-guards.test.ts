@@ -238,7 +238,7 @@ describe("drift promote repoints the profile's own local recipe (the user's ruli
     expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
   });
 
-  it("a local recipe of the child that its abstract parent lists by name is the family's: refused as D17_PARENT (schema 13)", async () => {
+  it("a local recipe of the child that its abstract parent lists by name is the family's: refused: no command writes a parent (schema 13)", async () => {
     const s: ForgeSpec = {
       ingredients: shared.ingredients,
       recipes: shared.recipes,
@@ -253,7 +253,7 @@ describe("drift promote repoints the profile's own local recipe (the user's ruli
     await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "kid's own text\n");
     const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("recipe kidrec reaches kid through profile base, which it extends — forking it would edit base's recipes, and no command writes a parent");
+    expect(r.stderr).toContain("recipe kidrec is local to kid, and profile base, which it extends, lists it — no command writes a parent: edit the Forge by hand");
     expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
   });
 
