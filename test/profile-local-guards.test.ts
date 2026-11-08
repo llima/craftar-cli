@@ -172,6 +172,18 @@ describe("drift promote repoints the profile's own local recipe (the user's ruli
     expect(runCli(["sync", "--check", "--workspace", f.ws]).code).toBe(0);
   });
 
+  it("a local recipe saved with CRLF keeps its line endings when repointed", async () => {
+    const crlf = { "profiles/acme/recipes/acme-extra.yaml": "name: acme-extra\r\ningredients:\r\n  - rule/workflow\r\n  - rule/style\r\n" };
+    const f = await forgeWith(crlf, shared);
+    expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
+    await fs.writeFile(path.join(f.ws, ".claude/rules/workflow.md"), "acme's own text\n");
+    const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", f.ws]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(await fs.readFile(path.join(f.dir, "profiles/acme/recipes/acme-extra.yaml"), "utf8")).toBe(
+      "name: acme-extra\r\ningredients:\r\n  - rule/workflow--acme\r\n  - rule/style\r\n",
+    );
+  });
+
   it("a local recipe git does not hold is refused, the Forge untouched", async () => {
     const f = await forgeWith(acmeExtra(["rule/workflow", "rule/style"]), shared);
     expect(runCli(["sync", "--workspace", f.ws]).code).toBe(0);
