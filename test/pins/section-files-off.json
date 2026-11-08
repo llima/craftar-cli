@@ -17,7 +17,8 @@
       "defaultBranch": null,
       "commit": null,
       "lockCommit": null,
-      "fetched": false
+      "fetched": false,
+      "newerTag": null
     },
     "statuses": [
       {
@@ -140,7 +141,8 @@
       "defaultBranch": null,
       "commit": null,
       "lockCommit": null,
-      "fetched": false
+      "fetched": false,
+      "newerTag": null
     },
     "statuses": [
       {

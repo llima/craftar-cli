@@ -13,6 +13,7 @@ import { withoutValidatedDelta } from "./helpers/validated-targets-delta.js";
 import { acmeSections } from "./helpers/target-sections.js";
 import { acmeIndex } from "./helpers/rules-index.js";
 import { skipResidue, withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
+import { withoutNewerTag } from "./helpers/newer-tag-delta.js";
 
 /**
  * Spec 61 slice 2 (§7, plan R0): pin what a workspace naming slice-1 targets but neither `antigravity` nor `codex` sees
@@ -419,8 +420,8 @@ describe("native-targets-2-off baseline pin (spec 61 slice 2, R0)", () => {
     for (const key of Object.keys(observed) as Array<keyof PinFile>) {
       // Spec 61 slice 3's deliberate delta is filtered by name out of both sides (test/helpers/slice3-delta.ts).
       expect(skipResidue(observed[key], expected[key])).toEqual([]);
-      if (key === "slice1-orphan") expect(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(observed[key])))).toEqual(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(expected[key]))));
-      else expect(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(withoutTimestamps(observed[key] as ScenarioRecord))))).toEqual(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(withoutTimestamps(expected[key] as ScenarioRecord)))));
+      if (key === "slice1-orphan") expect(withoutNewerTag(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(observed[key]))))).toEqual(withoutNewerTag(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(expected[key])))));
+      else expect(withoutNewerTag(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(withoutTimestamps(observed[key] as ScenarioRecord)))))).toEqual(withoutNewerTag(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(withoutTimestamps(expected[key] as ScenarioRecord))))));
     }
   });
 

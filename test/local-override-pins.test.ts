@@ -7,6 +7,7 @@ import { FORGE_SCHEMA_LOCAL_OVERRIDE } from "../src/schema/index.js";
 import { runCli } from "./helpers/cli.js";
 import { makeForge, makeWorkspace, profile, recipe, rule, tmpDir, writeFiles, type ForgeSpec } from "./helpers/forge.js";
 import { git } from "./helpers/remote.js";
+import { withoutNewerTag } from "./helpers/newer-tag-delta.js";
 
 /**
  * Spec 56 §9: pin, BEFORE any source change of spec 56, what a Forge below the override gate answers — a Forge at
@@ -129,6 +130,6 @@ describe("local override off baseline pin (spec 56 §9)", () => {
       await fs.writeFile(PIN_FILE, JSON.stringify(observed, null, 2) + "\n");
       return;
     }
-    expect(deliberate(observed)).toEqual(JSON.parse(await fs.readFile(PIN_FILE, "utf8")));
+    expect(withoutNewerTag(deliberate(observed))).toEqual(withoutNewerTag(JSON.parse(await fs.readFile(PIN_FILE, "utf8"))));
   });
 });
