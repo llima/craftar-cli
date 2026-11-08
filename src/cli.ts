@@ -90,6 +90,7 @@ import { askInit, askClone, confirmInit, againLine, NOT_CLONED_REFUSED, type Ini
 import { findGit, cloneRepos, listRepos, planClone, type CloneResult, type DestinationContext, type RepoState } from "./core/clone.js";
 import { byHand, profileRepos, type RepoEntry } from "./core/repos.js";
 import { readlineIo } from "./prompt.js";
+import { askSetup, confirmSetup, setupAgainLine } from "./core/setup-flow.js";
 import { derivedName, rulesReachNoFile, setupForgeFiles, setupSchema, STARTER_REACHES_NO_FILE } from "./core/setup.js";
 import { checkGitIdentity, checkSetupFlags, checkSetupPlaces, commitSetupForge, GIT_NEEDED, holdsClaude, parseTargets, proveSetupForge, SetupLateFailure, writeSetupForge, type ForgeDirState, type SetupWrites } from "./core/setup-write.js";
 import type { Eol } from "./core/text.js";
@@ -741,25 +742,41 @@ async function setupCommand(o: SetupOptions): Promise<void> {
   if (!flagsForm && !isTTY) {
     fail("setup: --forge-dir and --profile are required when craftar setup does not run in a terminal — pass them, or run craftar setup in a terminal to be asked");
   }
-  if (!flagsForm) fail("setup: the interactive mode is not built yet — pass --forge-dir and --profile");
   const targets = o.targets === undefined ? undefined : parseTargets(o.targets);
+  // The given flags are checked first, in either mode (S1, S5, S11).
   try {
-    checkSetupFlags({ forgeDir: o.forgeDir!, name: o.name, profile: o.profile!, targets, workspaces: o.workspace, import: o.import }, process.platform);
+    checkSetupFlags({ forgeDir: o.forgeDir ?? ".", name: o.name, profile: o.profile ?? "x", targets, workspaces: o.workspace, import: o.import }, process.platform);
   } catch (e) {
     fail(errorText(e));
   }
-  await runSetup({
-    forgeAbs: path.resolve(o.forgeDir!),
-    name: o.name,
-    profile: o.profile!,
-    targets: (targets ?? ["claude-code"]) as Target[],
-    starter: o.starter !== false,
-    git: o.git !== false,
-    workspaces: o.workspace.map((w) => path.resolve(w)),
-    import: o.import,
-    sync: o.sync,
-    isTTY,
-  });
+  if (flagsForm) {
+    await runSetup({
+      forgeAbs: path.resolve(o.forgeDir!),
+      name: o.name,
+      profile: o.profile!,
+      targets: (targets ?? ["claude-code"]) as Target[],
+      starter: o.starter !== false,
+      git: o.git !== false,
+      workspaces: o.workspace.map((w) => path.resolve(w)),
+      import: o.import,
+      sync: o.sync,
+      isTTY,
+    });
+    return;
+  }
+  // The interactive mode (§4.5): the questions, one confirmation, then the same run; the `again` line closes it.
+  const ctx = { cwd: process.cwd(), home: craftarHome(), platform: process.platform };
+  const io = readlineIo(process.stdin, process.stdout, { terminal: true });
+  const asked = await askSetup(
+    { forgeDir: o.forgeDir, name: o.name, profile: o.profile, targets, starter: o.starter, git: o.git !== false, workspaces: o.workspace, import: o.import, sync: o.sync },
+    io,
+    ctx,
+  ).catch((e) => fail(errorText(e)));
+  if (asked.kind === "cancelled") fail("setup cancelled — nothing written");
+  const a = asked.answers;
+  if ((await confirmSetup(a, readlineIo(process.stdin, process.stdout, { terminal: true }), { sync: o.sync })) === "cancelled") fail("setup cancelled — nothing written");
+  await runSetup({ ...a, import: a.workspaces.length > 0 ? a.import : undefined, sync: o.sync, isTTY });
+  console.log(setupAgainLine(a, ctx.cwd, { sync: o.sync }));
 }
 
 interface SetupRun {
