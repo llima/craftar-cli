@@ -83,6 +83,15 @@ describe("setupForgeFiles (§5.1, §5.2)", () => {
     for (const l of SCHEMA_LEVELS) expect(text).toContain(`| ${l.level} |`);
   });
 
+  it("README warns against keeping the Forge inside a workspace's git repository (spec 62 §6, C7), with or without the starter", () => {
+    for (const starter of [true, false]) {
+      const text = setupForgeFiles({ name: "f", profile: "acme", targets: ["claude-code"], starter }).find((f) => f.path === "README.md")!.text;
+      expect(text).toContain("## Where this Forge lives\n");
+      expect(text).toContain("Keep this Forge out of a workspace's git repository");
+      expect(text).toContain("commit the Forge by mistake");
+    }
+  });
+
   it("the files load as a Forge and the profile resolves the starter rule", async () => {
     for (const starter of [true, false]) {
       const root = await fs.realpath(await tmpDir("craftar-setup-core-"));
