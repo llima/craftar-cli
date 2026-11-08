@@ -12,7 +12,7 @@ import { withoutSlice3Delta } from "./helpers/slice3-delta.js";
 import { withoutValidatedDelta } from "./helpers/validated-targets-delta.js";
 import { acmeSections } from "./helpers/target-sections.js";
 import { acmeIndex } from "./helpers/rules-index.js";
-import { withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
+import { skipResidue, withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
 
 /**
  * Spec 61 slice 3 (plan R0): pin what a workspace naming no slice-3 target sees BEFORE any slice-3 source change, so a later change
@@ -383,6 +383,7 @@ describe("native-targets-3-off baseline pin (spec 61 slice 3, R0)", () => {
     // Apply withoutTimestamps filter to both for comparison
     for (const key of Object.keys(observed) as Array<keyof PinFile>) {
       // Spec 61 slice 3's deliberate delta is filtered by name out of both sides (test/helpers/slice3-delta.ts).
+      expect(skipResidue(observed[key], expected[key])).toEqual([]);
       expect(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(withoutTimestamps(observed[key]))))).toEqual(withoutCoveredSkip(withoutValidatedDelta(withoutSlice3Delta(withoutTimestamps(expected[key])))));
     }
   });

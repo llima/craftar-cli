@@ -7,7 +7,7 @@ import { acmeSections } from "./helpers/target-sections.js";
 import { loadWorkspace, plan } from "../src/core/sync.js";
 import type { Scenario } from "./helpers/forge.js";
 import { atLeastWin32 } from "./helpers/timeouts.js";
-import { withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
+import { skipResidue, withoutCoveredSkip } from "./helpers/covered-skip-delta.js";
 
 // No test here runs Docker: doctor's child gets a PATH that holds only an empty temp dir, so `docker` is never found.
 let EMPTY_DIR: string;
@@ -226,6 +226,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
 
     // Compare mode: load the pin and compare
     const expected = await loadPin();
+    expect(skipResidue(observed, expected)).toEqual([]);
     expect(withoutCoveredSkip(withoutMachine(observed))).toEqual(withoutCoveredSkip(withoutMachine(expected)));
   });
 
@@ -342,6 +343,7 @@ describe("target-sections=off baseline pin (spec 41 Part B §11.4)", () => {
 
     // Compare with the same pin as schema 5 — they must be identical
     const expected = await loadPin();
+    expect(skipResidue(observed, expected)).toEqual([]);
     expect(withoutCoveredSkip(withoutMachine(observed))).toEqual(withoutCoveredSkip(withoutMachine(expected)));
   });
 
