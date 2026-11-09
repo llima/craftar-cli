@@ -24,6 +24,8 @@ describe("fetchFaultHint", () => {
     "remote: Access denied",
     "unable to access 'https://example.invalid/acme/forge.git/': The requested URL returned error: 403",
     "unable to access 'https://example.invalid/acme/forge.git/': The requested URL returned error: 401",
+    "unable to get password from user",
+    "could not read Password for 'https://example.invalid': terminal prompts disabled",
   ])("names a missing repository or a missing access for %s", (msg) => {
     expect(fetchFaultHint(msg)).toBe(FETCH_NO_ACCESS);
   });

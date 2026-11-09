@@ -385,7 +385,7 @@ export class NoCachedCopyError extends Error {
  */
 export const FETCH_NO_ACCESS =
   "the repository was not found, or the git account this machine uses has no access to it: check which account your credential helper or SSH key answers with for this host";
-const NO_ACCESS = /repository not found|could not be found|could not read username|terminal prompts disabled|authentication failed|permission denied|access denied|returned error: 40[13]\b/i;
+const NO_ACCESS = /repository not found|could not be found|could not read username|could not read password|unable to get password|terminal prompts disabled|authentication failed|permission denied|access denied|returned error: 40[13]\b/i;
 export function fetchFaultHint(gitMessage: string): string | null {
   return NO_ACCESS.test(gitMessage) ? FETCH_NO_ACCESS : null;
 }
