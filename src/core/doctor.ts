@@ -21,7 +21,8 @@ import { outName, MCP_FILE, COPILOT_CLI_MCP_FILE, EXAMPLE_SETTINGS, flatSkills, 
 import { plannedRegistrations, sameHandler, type PlannedRegistration } from "./settings-apply.js";
 import { stripBom } from "./text.js";
 import { declaredTemplates, DOTNET_MISSING, DOTNET_MISSING_DOCTOR_FIX, DOTNET_PROBE_DIR_FAILED, DOTNET_PROBE_DIR_FIX, dotnetVersionInOwnDir, feedMessage, globalJsonFault, globalJsonMessage, GLOBAL_JSON_FIX, GLOBAL_JSON_REFUSED, notInstalled, profileLabel, unpinnedSources, type Declared } from "./templates.js";
-import { capture, execProgram, type Probe } from "./proc.js";
+import { capture, execProgram, lookupEntries, onPath, type Probe } from "./proc.js";
+import { findSecrets } from "./secrets.js";
 
 /*
  * `craftar doctor` (spec 24): every check Craftar can make about this machine and, inside one, this
@@ -255,7 +256,7 @@ async function workspaceChecks(
         ws = await loadForgeFor(given, merged, { mode: opts.fetch ? "read" : "no-fetch", home: opts.home, git: opts.git });
       } catch (e) {
         // Decided by stage, not by message (§5.1): the Forge of a remote configuration read offline failed to load.
-        w("config", "error", oneLine(e), remote && !opts.fetch ? "craftar doctor --fetch" : null);
+        w("config", "error", oneLine(e), remote && !opts.fetch ? "craftar doctor --fetch (it fetches the Forge and, when the fetch fails, says why)" : null);
       }
     }
   }
@@ -448,6 +449,9 @@ async function workspaceChecks(
 
       // hooks-registered: present only when the plan writes at least one registration (spec 43 §6)
       await hooksRegistered(root, p, opts, w, env);
+
+      // hook-command: present only when a registration's command names a program not on PATH (feedback of 2026-11-09)
+      await hookCommand(p, w, env);
 
       // skill-layout: present only when flatSkills is non-empty (spec 44 §5)
       await skillLayout(p, ws.forge.root, w);
@@ -830,6 +834,84 @@ export async function claudeMdAncestors(
     }
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* hook-command check                                                  */
+/* ------------------------------------------------------------------ */
+
+/** A program name doctor judges: a bare word, never a path, a variable, quotes or an assignment. */
+const BARE_PROGRAM = /^[A-Za-z0-9._+-]{1,64}$/;
+/** Shell builtins and words that start a command line without naming the program it runs. */
+const SHELL_WORDS = new Set(["cd", "exec", "source", ".", "test", "[", "echo", "true", "false", "export", "command", "builtin", "eval", "set", "unset", "if", "for", "while", "case", "time", "!", "{", "("]);
+const NOT_SHOWN = "the first word of its command (not shown)";
+
+/**
+ * The program a rendered hook handler starts, when doctor can tell: the first word of a shell-form command
+ * (bash, the default) or the whole command of an exec-form one (with `args`). Null for anything else.
+ */
+export function hookProgram(handler: unknown): string | null {
+  if (handler === null || typeof handler !== "object") return null;
+  const h = handler as { command?: unknown; args?: unknown; shell?: unknown };
+  if (typeof h.command !== "string") return null;
+  if (h.shell !== undefined && h.shell !== "bash") return null;
+  const word = h.args !== undefined ? h.command : (h.command.trim().split(/\s+/)[0] ?? "");
+  if (!BARE_PROGRAM.test(word) || SHELL_WORDS.has(word)) return null;
+  return word;
+}
+
+/** Extensions a hook's shell on Windows starts a bare name by (Git Bash and cmd alike reach a `.cmd` shim such as `npx`). */
+const WIN_HOOK_EXTENSIONS = ["", ".exe", ".com", ".cmd", ".bat"];
+
+/**
+ * Whether a hook's shell would find `name`: off win32 `onPath` (an executable file on an absolute PATH entry);
+ * on win32 any file named so, or with one of `WIN_HOOK_EXTENSIONS`, on `lookupEntries`, which `onPath` would not start.
+ */
+async function programFound(name: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (process.platform !== "win32") return (await onPath(name, env)) !== null;
+  for (const entry of lookupEntries(env)) {
+    for (const ext of WIN_HOOK_EXTENSIONS) {
+      try {
+        if ((await fs.stat(path.join(entry, name + ext))).isFile()) return true;
+      } catch {
+        /* not there */
+      }
+    }
+  }
+  return false;
+}
+
+/** How a program name is printed: as itself when it is shaped like a name and holds no token. */
+export function shownProgram(word: string): string {
+  return BARE_PROGRAM.test(word) && findSecrets(word).length === 0 ? word : NOT_SHOWN;
+}
+
+/**
+ * The hook-command check: a warn per registration whose command names a program not on this machine's PATH.
+ * Present only with a finding; never above warn. Covers the registrations the claude-code target writes.
+ * With no PATH in the environment nothing can be judged, so nothing is said.
+ */
+async function hookCommand(
+  p: Plan,
+  w: (id: string, level: CheckLevel, message: string, fix?: string | null) => void,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (lookupEntries(env).length === 0) return;
+  for (const entry of plannedRegistrations(p)) {
+    if (entry.hasMissing) continue;
+    const program = hookProgram(entry.handler);
+    if (program === null) continue;
+    if (await programFound(program, env)) continue;
+    const shown = shownProgram(program);
+    w(
+      "hook-command",
+      "warn",
+      `${entry.ref}: registration ${entry.index} (${entry.event}) runs ${shown}, which is not on this machine's PATH`,
+      shown === NOT_SHOWN
+        ? "install the program it names, or change the hook's command in the Forge to a program this machine has"
+        : `install ${shown}, or change the hook's command in the Forge to a program this machine has`,
+    );
+  }
 }
 
 /* ------------------------------------------------------------------ */

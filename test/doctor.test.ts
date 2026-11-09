@@ -517,7 +517,7 @@ describe("a remote Forge (§4.2 forge row, §6 cases 2–4)", () => {
     cleanups.push(r.cleanup);
     await ensureTree(r.url, null, { home: f.home });
     const a = await f.ws("acme-remote", { profile: "acme", forge: r.url, ref: "nope" });
-    expect(one((await run({ home: f.home, workspace: a })).checks, "config")).toMatchObject({ level: "error", fix: "craftar doctor --fetch" });
+    expect(one((await run({ home: f.home, workspace: a })).checks, "config")).toMatchObject({ level: "error", fix: "craftar doctor --fetch (it fetches the Forge and, when the fetch fails, says why)" });
   });
 
   it("never fetched: config error with the --fetch fix; --fetch fetches it", async () => {
@@ -525,7 +525,7 @@ describe("a remote Forge (§4.2 forge row, §6 cases 2–4)", () => {
     const r = await remoteForge(FORGE);
     cleanups.push(r.cleanup);
     const a = await f.ws("acme-remote", { profile: "acme", forge: r.url });
-    expect(one((await run({ home: f.home, workspace: a })).checks, "config")).toMatchObject({ level: "error", fix: "craftar doctor --fetch" });
+    expect(one((await run({ home: f.home, workspace: a })).checks, "config")).toMatchObject({ level: "error", fix: "craftar doctor --fetch (it fetches the Forge and, when the fetch fails, says why)" });
     const fetched = await run({ home: f.home, workspace: a, fetch: true });
     expect(one(fetched.checks, "forge").message).toMatch(/fetched now$/);
   });

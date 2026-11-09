@@ -3,6 +3,7 @@
  * sees today BEFORE any source change, so the later task can prove hooks-registered fix text
  * is the only change.
  */
+import { withoutHookCommand } from "./helpers/hook-command-delta.js";
 import { promises as fs, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -106,7 +107,7 @@ async function buildScenario() {
  * presence depends on the PATH the test gives: not part of what the pin proves.
  */
 function withoutMachine(checks: Observed["doctorChecks"]): Observed["doctorChecks"] {
-  return checks.filter((c) => c.id !== "docker" && c.scope !== "machine");
+  return withoutHookCommand(checks.filter((c) => c.id !== "docker" && c.scope !== "machine"));
 }
 
 /**

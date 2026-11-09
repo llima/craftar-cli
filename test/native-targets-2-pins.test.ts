@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { HOOK_COMMAND } from "./helpers/hook-command-delta.js";
 import { createHash } from "node:crypto";
 import { promises as fs, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -275,7 +276,7 @@ async function buildScenarioRecord(s: Scenario, includeExplainPrimary = false, c
     const doctorJson = JSON.parse(doctorResult.stdout);
     if (doctorJson.checks && Array.isArray(doctorJson.checks)) {
       doctorWorkspace = (doctorJson.checks as Array<{ id: string; scope: string; level: string; message: string; fix: string | null }>)
-        .filter((c) => c.scope === "workspace")
+        .filter((c) => c.scope === "workspace" && c.id !== HOOK_COMMAND)
         .map((c) => ({ id: c.id, level: c.level, message: c.message, fix: c.fix }));
     }
   } catch {

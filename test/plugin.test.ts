@@ -103,6 +103,21 @@ describe("the Claude Code plugin (spec 45)", () => {
     expect(text).not.toContain("{{");
   });
 
+  it("4e. the plugin's README says how a Node from nvm reaches the server and that a worktree without craftar.yaml reads as failed", async () => {
+    const text = await read("plugins", "craftar", "README.md");
+    const start = text.indexOf("## If `craftar` and `node` come from nvm");
+    expect(start).toBeGreaterThan(-1);
+    const section = text.slice(start, text.indexOf("\n## ", start + 1));
+    expect(section).toContain("Reported on Ubuntu with nvm, on 2026-11-09");
+    expect(section).toContain("#!/usr/bin/env node");
+    expect(section).toContain("ln -s ~/.nvm/versions/node/<version>/bin/craftar ~/.local/bin/craftar");
+    expect(section).toContain("ln -s ~/.nvm/versions/node/<version>/bin/node ~/.local/bin/node");
+    expect(section).toContain("make the links again");
+    expect(section).not.toMatch(/[\u2014\u2013]/);
+    expect(text).toContain("**A git worktree without its own `craftar.yaml`.**");
+    expect(text).toContain("If `craftar` or `node` comes from nvm, asdf, volta or mise");
+  });
+
   it("5. the skill never offers --allow-writes, and names --overwrite-drift only to forbid it", async () => {
     const lines = await skillLines();
     expect(lines.filter((l) => l.includes("--allow-writes"))).toEqual([]);

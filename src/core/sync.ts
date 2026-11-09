@@ -9,7 +9,7 @@ import { lockSchemaFor } from "./native-targets.js";
 import { resolve, substitute, type ParamLayer, type Resolution, type ResolvedIngredient, paramLayer, paramsFor, sectionKey, sectionsFor, listsOf } from "./resolve.js";
 import { climbsOut, hashNormalized, isUtf8, legacyHash, stripBom, toLf } from "./text.js";
 import { parseWorkspaceYaml } from "./workspace-yaml.js";
-import { classifyForge, credentialFault, ensureTree, shownByRealPath, refHoldsCredentials, shownRef, ForgeFetchError, ForgeUnavailableError, NoCachedCopyError, type CachedTree, type GitRunner } from "./remote.js";
+import { classifyForge, credentialFault, ensureTree, shownByRealPath, refHoldsCredentials, shownRef, ForgeFetchError, ForgeUnavailableError, NoCachedCopyError, fetchFailureText, type CachedTree, type GitRunner } from "./remote.js";
 import { diskSource, type WorkspaceSource } from "./workspace-source.js";
 import { resolveHome } from "./home-lock.js";
 import { deepMerge } from "./merge.js";
@@ -299,7 +299,7 @@ async function remoteTree(
     if (!(e instanceof ForgeFetchError)) throw e;
     if (!e.cached)
       throw new ForgeUnavailableError(
-        `cannot fetch the Forge ${url}: ${e.gitMessage} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref === null ? "the default branch" : refHoldsCredentials(ref) ? shownRef(ref) : ref}` : "and there is no cached copy to fall back on"}`,
+        `cannot fetch the Forge ${url}: ${fetchFailureText(e.gitMessage)} — ${e.haveCopy ? `and the cached copy cannot resolve ${ref === null ? "the default branch" : refHoldsCredentials(ref) ? shownRef(ref) : ref}` : "and there is no cached copy to fall back on"}`,
       );
     if (mode === "sync") {
       const tail = fetchHint === "fresh-copy"
@@ -307,10 +307,10 @@ async function remoteTree(
         : fetchHint === "mcp"
           ? `craftar mcp syncs a remote Forge only from a fresh fetch — run craftar sync --offline in a terminal to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`
           : `run with --offline to use the cached copy (${short(e.cached.commit)} fetched ${e.cached.fetchedAt ?? "never"})`;
-      throw new Error(`cannot fetch the Forge ${url}: ${e.gitMessage} — ${tail}`);
+      throw new Error(`cannot fetch the Forge ${url}: ${fetchFailureText(e.gitMessage)} — ${tail}`);
     }
     const t = await ensureTree(url, ref, { home, offline: true, git });
-    return { tree: t.dir, origin: origin(t), warning: `Forge ${url} not fetched (${e.gitMessage}) — using ${used(t)}`, fetchFailed: true };
+    return { tree: t.dir, origin: origin(t), warning: `Forge ${url} not fetched (${fetchFailureText(e.gitMessage)}) — using ${used(t)}`, fetchFailed: true };
   }
 }
 

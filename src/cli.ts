@@ -115,7 +115,7 @@ process.stdout.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE
 const DIFF_EXIT_CODE_FETCH_MODE: FetchMode = "sync";
 
 const program = new Command();
-program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.9.0");
+program.name("craftar").description("Craft, sync and convert AI-coding workspace harnesses.").version("1.10.0");
 
 /* ---------------------------------------------------------------- import */
 /** The words of one output-path gate (`gateOutsideForge`), declared before the commands that run at load: what is written, by which command, and its two refusals' endings. */
@@ -1816,7 +1816,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, lock — and lock-credential when it records a Forge URL with credentials —, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
+    "Check this machine (Node, git, $CRAFTAR_HOME, the registry, the Forge cache) and, inside one, this workspace (configuration and Forge, plan, declared parameters, MCP environment variables, Windows-only MCP launchers, generated files git ignores, the profile's templates block and dotnet when it has one, hooks-registered when the plan writes a registration, hook-command when a hook names a program not on PATH, lock — and lock-credential when it records a Forge URL with credentials —, status, registry entry): one line per finding — ok, warn or error — each with its fix; a path that leaves the workspace through a symbolic link is an error (workspace-links). Reports only; reads without the network unless --fetch",
   )
   // No commander default: an explicit --workspace without craftar.yaml exits 1, the current directory without one runs the machine checks (spec 24 §4.1).
   .option("--workspace <dir>", "the workspace to check (default: the current directory, when it holds craftar.yaml)")

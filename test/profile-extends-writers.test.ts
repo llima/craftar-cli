@@ -221,7 +221,7 @@ describe("spec 54 Part B — the writers", () => {
     await expect(
       planPromote({ workspaceRoot: f0.ws.portal, forgeDir: null, path: ".claude/rules/style.md", home: home(), env: { ...process.env, CRAFTAR_NO_REGISTRY: "1" } }),
     ).rejects.toThrow(
-      ".claude/rules/style.md: recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent: edit the Forge by hand",
+      ".claude/rules/style.md: recipe base reaches acme-portal through profile acme, which it extends — forking it would edit acme's recipes, and no command writes a parent: only the Forge's maintainers change a parent's recipes, so ask them for a variant for this profile, or edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with `craftar drift discard .claude/rules/style.md`",
     );
   });
 
