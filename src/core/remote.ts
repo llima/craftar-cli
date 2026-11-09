@@ -381,11 +381,12 @@ export class NoCachedCopyError extends Error {
 /**
  * What a failed fetch means when git's own words say the repository was not found or refused this account:
  * fixed words, never a value of git's message (feedback of 2026-11-09). Null for any other failure, a network
- * one or a local path that is no repository among them.
+ * one, a local path that is no repository and a local file git may not read among them: "permission denied" and
+ * "access denied" count only in the forms ssh and a Forge's server print, never bare.
  */
 export const FETCH_NO_ACCESS =
   "the repository was not found, or the git account this machine uses has no access to it: check which account your credential helper or SSH key answers with for this host";
-const NO_ACCESS = /repository not found|could not be found|could not read username|could not read password|unable to get password|terminal prompts disabled|authentication failed|permission denied|access denied|returned error: 40[13]\b/i;
+const NO_ACCESS = /repository not found|could not be found|could not read username|could not read password|unable to get password|terminal prompts disabled|authentication failed|permission denied \(|remote: access denied|access denied or repository not exported|returned error: 40[13]\b/i;
 export function fetchFaultHint(gitMessage: string): string | null {
   return NO_ACCESS.test(gitMessage) ? FETCH_NO_ACCESS : null;
 }

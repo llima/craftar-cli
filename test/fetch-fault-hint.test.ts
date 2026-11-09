@@ -22,6 +22,8 @@ describe("fetchFaultHint", () => {
     "Authentication failed for 'https://example.invalid/acme/forge.git/'",
     "git@example.invalid: Permission denied (publickey).",
     "remote: Access denied",
+    "git@example.invalid: Permission denied (publickey,password).",
+    "access denied or repository not exported: /acme/forge.git",
     "unable to access 'https://example.invalid/acme/forge.git/': The requested URL returned error: 403",
     "unable to access 'https://example.invalid/acme/forge.git/': The requested URL returned error: 401",
     "unable to get password from user",
@@ -35,6 +37,9 @@ describe("fetchFaultHint", () => {
     "unable to access 'https://example.invalid/': Failed to connect to example.invalid port 443",
     "'/tmp/nowhere' does not appear to be a git repository",
     "the remote does not answer",
+    "error: cannot open .git/FETCH_HEAD: Permission denied",
+    "could not lock config file /tmp/acme/config: Permission denied",
+    "unable to create temporary file: Access denied",
     "",
   ])("says nothing for %s", (msg) => {
     expect(fetchFaultHint(msg)).toBeNull();
