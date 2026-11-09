@@ -1080,7 +1080,7 @@ describe("cli — drift promote (step 30f)", () => {
     const r = runCli(["drift", "promote", C, "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe(`error: recipe extra reaches this workspace through recipes.add (craftar.yaml) — promote does not fork a recipe chain; the recipe is shared in the Forge, so only the Forge's maintainers change it: ask them for a variant for this profile, or edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${C}\`\n`);
+    expect(r.stderr).toBe(`error: recipe extra reaches this workspace through recipes.add (craftar.yaml), which this workspace chose — promote does not fork a recipe chain; the recipe is the Forge's, so only the Forge's maintainers change it: take extra out of recipes.add, edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${C}\`\n`);
     expect(porcelain(s.forgeRoot)).toBe("");
   });
 

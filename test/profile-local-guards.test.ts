@@ -198,7 +198,7 @@ describe("drift promote repoints the profile's own local recipe (the user's ruli
     await fs.writeFile(path.join(ws, ".claude/rules/workflow.md"), "acme's own text\n");
     const r = runCli(["drift", "promote", ".claude/rules/workflow.md", "--workspace", ws]);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("recipe acme-extra reaches this workspace through recipes.add (craftar.yaml) — promote does not fork a recipe chain");
+    expect(r.stderr).toContain("recipe acme-extra reaches this workspace through recipes.add (craftar.yaml), which this workspace chose — promote does not fork a recipe chain");
     expect(git(f.dir, "status", "--porcelain", "--untracked-files=all")).toBe("");
   });
 

@@ -260,8 +260,12 @@ const D16_SAME_PROFILE_OVERRIDE = (wsPath: string, ingredient: string) =>
   `${wsPath} fills ${ingredient} from its own overrides — a variant would silently stop applying them there; the Forge was left untouched`;
 const D16_BREAK = (wsPath: string, profile: string, errMsg: string) =>
   `promote would break ${wsPath} (profile ${profile}): ${errMsg.split("\n")[0]} — the Forge was left untouched`;
+const RECIPES_ADD_CHAIN = "recipes.add (craftar.yaml)";
+/** D17: a recipe this workspace adds by its own `recipes.add` is the workspace's choice, so taking it out is a way out too. */
 const D17 = (recipe: string, chain: string, p: string) =>
-  `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; the recipe is shared in the Forge, so only the Forge's maintainers change it: ask them for a variant for this profile, or ${WAYS_OUT(p)}`;
+  chain === RECIPES_ADD_CHAIN
+    ? `recipe ${recipe} reaches this workspace through ${chain}, which this workspace chose — promote does not fork a recipe chain; the recipe is the Forge's, so only the Forge's maintainers change it: take ${recipe} out of recipes.add, ${WAYS_OUT(p)}`
+    : `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; the recipe is shared in the Forge, so only the Forge's maintainers change it: ask them for a variant for this profile, or ${WAYS_OUT(p)}`;
 const D18 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
   `${p} comes from recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const D19 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
@@ -1249,7 +1253,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         const own = resolvedRecipes(forge, profile);
         if (own === null) throw new Error(`${normalized}: profile ${profile} does not resolve on its own, so promote cannot tell whether ${R} is its own recipe — fix the profile, or edit the Forge by hand`);
         if (!own.has(R)) {
-          const chain = (ws.config.recipes?.add ?? []).includes(R) ? "recipes.add (craftar.yaml)" : (findExtendsChain(forgeFor(forge, profile), p0.resolution.recipes, R) ?? R);
+          const chain = (ws.config.recipes?.add ?? []).includes(R) ? RECIPES_ADD_CHAIN : (findExtendsChain(forgeFor(forge, profile), p0.resolution.recipes, R) ?? R);
           throw new Error(D17(R, chain, normalized));
         }
         await repointLocalRecipe({ forgeDir, realForgeDir, stage, file: ownLocal.file, from: refToReplace, to: variantRef });
@@ -1383,7 +1387,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         let chain: string;
         const wsAdds = ws.config.recipes?.add ?? [];
         if (wsAdds.includes(R)) {
-          chain = "recipes.add (craftar.yaml)";
+          chain = RECIPES_ADD_CHAIN;
         } else if (extendsChain) {
           chain = extendsChain;
         } else {
