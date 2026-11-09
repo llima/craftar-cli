@@ -255,7 +255,7 @@ async function workspaceChecks(
         ws = await loadForgeFor(given, merged, { mode: opts.fetch ? "read" : "no-fetch", home: opts.home, git: opts.git });
       } catch (e) {
         // Decided by stage, not by message (§5.1): the Forge of a remote configuration read offline failed to load.
-        w("config", "error", oneLine(e), remote && !opts.fetch ? "craftar doctor --fetch" : null);
+        w("config", "error", oneLine(e), remote && !opts.fetch ? "craftar doctor --fetch (it fetches the Forge and, when the fetch fails, says why)" : null);
       }
     }
   }

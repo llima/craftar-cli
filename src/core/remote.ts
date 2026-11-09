@@ -378,6 +378,24 @@ export class NoCachedCopyError extends Error {
   }
 }
 
+/**
+ * What a failed fetch means when git's own words say the repository was not found or refused this account:
+ * fixed words, never a value of git's message (feedback of 2026-11-09). Null for any other failure, a network
+ * one or a local path that is no repository among them.
+ */
+export const FETCH_NO_ACCESS =
+  "the repository was not found, or the git account this machine uses has no access to it: check which account your credential helper or SSH key answers with for this host";
+const NO_ACCESS = /repository not found|could not be found|could not read username|terminal prompts disabled|authentication failed|permission denied|access denied|returned error: 40[13]\b/i;
+export function fetchFaultHint(gitMessage: string): string | null {
+  return NO_ACCESS.test(gitMessage) ? FETCH_NO_ACCESS : null;
+}
+
+/** Git's message for a failed fetch, followed by `fetchFaultHint`'s words when they apply. */
+export function fetchFailureText(gitMessage: string): string {
+  const hint = fetchFaultHint(gitMessage);
+  return hint === null ? gitMessage : `${gitMessage}; ${hint}`;
+}
+
 export const defaultGit: GitRunner = async (args, opts = {}) => {
   const env = { ...process.env };
   // CI fails fast instead of hanging on a credential prompt; a terminal may still prompt (spec 13 §14 item 4).
