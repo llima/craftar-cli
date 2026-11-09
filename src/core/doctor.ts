@@ -860,6 +860,27 @@ export function hookProgram(handler: unknown): string | null {
   return word;
 }
 
+/** Extensions a hook's shell on Windows starts a bare name by (Git Bash and cmd alike reach a `.cmd` shim such as `npx`). */
+const WIN_HOOK_EXTENSIONS = ["", ".exe", ".com", ".cmd", ".bat"];
+
+/**
+ * Whether a hook's shell would find `name`: off win32 `onPath` (an executable file on an absolute PATH entry);
+ * on win32 any file named so, or with one of `WIN_HOOK_EXTENSIONS`, on `lookupEntries`, which `onPath` would not start.
+ */
+async function programFound(name: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (process.platform !== "win32") return (await onPath(name, env)) !== null;
+  for (const entry of lookupEntries(env)) {
+    for (const ext of WIN_HOOK_EXTENSIONS) {
+      try {
+        if ((await fs.stat(path.join(entry, name + ext))).isFile()) return true;
+      } catch {
+        /* not there */
+      }
+    }
+  }
+  return false;
+}
+
 /** How a program name is printed: as itself when it is shaped like a name and holds no token. */
 export function shownProgram(word: string): string {
   return BARE_PROGRAM.test(word) && findSecrets(word).length === 0 ? word : NOT_SHOWN;
@@ -880,7 +901,7 @@ async function hookCommand(
     if (entry.hasMissing) continue;
     const program = hookProgram(entry.handler);
     if (program === null) continue;
-    if ((await onPath(program, env)) !== null) continue;
+    if (await programFound(program, env)) continue;
     const shown = shownProgram(program);
     w(
       "hook-command",

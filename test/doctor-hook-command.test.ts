@@ -135,6 +135,14 @@ describe("hook-command check", () => {
     expect(of((await run({ workspace: ws })).checks, "hook-command")).toEqual([]);
   });
 
+  it("4b. on Windows a .cmd or .bat on PATH counts, as a hook's shell finds it; elsewhere it does not", async () => {
+    await fs.writeFile(path.join(binDir, "shimtool.cmd"), "@echo off\r\n");
+    cleanups.push(() => fs.rm(path.join(binDir, "shimtool.cmd"), { force: true }));
+    const ws = await fixture([hook("guard", [{ event: "PreToolUse", command: "shimtool guard.py" }])]);
+    const found = of((await run({ workspace: ws })).checks, "hook-command");
+    expect(found.map((c) => c.message)).toEqual(WIN ? [] : ["hook/guard: registration 0 (PreToolUse) runs shimtool, which is not on this machine's PATH"]);
+  });
+
   it("5. no PATH in the environment: nothing can be judged, no line", async () => {
     const ws = await fixture([hook("guard", [{ event: "PreToolUse", command: "python guard.py" }])]);
     expect(of((await run({ workspace: ws, env: {} })).checks, "hook-command")).toEqual([]);
