@@ -1052,7 +1052,7 @@ describe("cli — drift promote (step 30f)", () => {
     const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe("error: recipe base reaches this workspace through top → base — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand\n");
+    expect(r.stderr).toBe(`error: recipe base reaches this workspace through top → base — promote does not fork a recipe chain; the recipe is shared in the Forge, so only the Forge's maintainers change it: ask them for a variant for this profile, or edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${A}\`\n`);
     expect(porcelain(s.forgeRoot)).toBe("");
   });
 
@@ -1080,7 +1080,7 @@ describe("cli — drift promote (step 30f)", () => {
     const r = runCli(["drift", "promote", C, "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe("error: recipe extra reaches this workspace through recipes.add (craftar.yaml) — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand\n");
+    expect(r.stderr).toBe(`error: recipe extra reaches this workspace through recipes.add (craftar.yaml) — promote does not fork a recipe chain; the recipe is shared in the Forge, so only the Forge's maintainers change it: ask them for a variant for this profile, or edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${C}\`\n`);
     expect(porcelain(s.forgeRoot)).toBe("");
   });
 
@@ -1108,7 +1108,7 @@ describe("cli — drift promote (step 30f)", () => {
     const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe("error: recipe base reaches this workspace through top → base — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand\n");
+    expect(r.stderr).toBe(`error: recipe base reaches this workspace through top → base — promote does not fork a recipe chain; the recipe is shared in the Forge, so only the Forge's maintainers change it: ask them for a variant for this profile, or edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${A}\`\n`);
     expect(porcelain(s.forgeRoot)).toBe("");
   });
 
@@ -1171,7 +1171,7 @@ describe("cli — drift promote (step 30f)", () => {
     const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot]);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe("error: rule/a--acme is also used by profile globex — its files would change there\n");
+    expect(r.stderr).toBe(`error: rule/a--acme is also used by profile globex — its files would change there; the Forge shares it with other profiles, so only the Forge's maintainers change it: edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${A}\`\n`);
     expect(porcelain(s.forgeRoot)).toBe("");
   });
 
@@ -1974,7 +1974,7 @@ describe("cli — drift promote (step 30h: impact check)", () => {
     const r = runCli(["drift", "promote", A, "--workspace", s.wsRoot], { env: { CRAFTAR_HOME: home } });
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toBe(`error: promote would change ${realWs2} (profile globex): ${A} — the Forge was left untouched\n`);
+    expect(r.stderr).toBe(`error: promote would change ${realWs2} (profile globex): ${A} — the Forge was left untouched; the Forge shares it with other profiles, so only the Forge's maintainers change it: edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${A}\`\n`);
     expect(porcelain(s.forgeRoot)).toBe("");
     expect((await fs.readFile(path.join(s.wsRoot, "craftar.lock"))).equals(lockBefore)).toBe(true);
   });

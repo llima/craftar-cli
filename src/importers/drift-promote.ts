@@ -222,14 +222,18 @@ const D7 = (ing: string, p: string, state: string, profile: string) =>
   `the Forge changed ${ing} since the last sync (${p}: ${state}) — a variant taken from the disk would undo that change for profile ${profile}; sync the rest, redo the edit on top, and promote again`;
 const D8 = (p: string, ing: string) => `${p} of ${ing} is missing on disk — restore it with \`craftar sync\` first`;
 const D9 = (ing: string, reason: string) => `${ing} looks like it holds a secret (${reason}) — nothing was written`;
-const D10 = (ing: string, q: string) => `${ing} is also used by profile ${q} — its files would change there`;
+/** The ways out of a refusal for something the Forge shares: no command here can change it (install-test feedback, 2026-11-09). */
+const WAYS_OUT = (p: string) =>
+  `edit it in a clone of the Forge and open a pull request there, or keep the Forge's text with \`craftar drift discard ${p}\``;
+const SHARED_WITH_PROFILES = (p: string) => `the Forge shares it with other profiles, so only the Forge's maintainers change it: ${WAYS_OUT(p)}`;
+const D10 = (ing: string, q: string, p: string) => `${ing} is also used by profile ${q} — its files would change there; ${SHARED_WITH_PROFILES(p)}`;
 /** D20 (spec 41 §4.10): storing the hand-edited text would carry agents-md.primary's rewording into the Forge. */
 const D20 = (p: string) => `${p} holds references agents-md.primary reworded — edit the Forge's ingredient`;
 /** D21 (spec 44 §4.5): the file holds the generated rules index — promoting it would carry sync-generated content into the Forge. */
 const D21 = (p: string) => `${p} holds the generated rules index — edit the Forge's rule, or the description of the rule it lists`;
 /** D17 under a family (spec 54 §5.9): the recipe to fork is listed by a parent only. */
 const D17_PARENT = (p: string, recipe: string, parent: string, profile: string) =>
-  `${p}: recipe ${recipe} reaches ${profile} through profile ${parent}, which it extends — forking it would edit ${parent}'s recipes, and no command writes a parent: edit the Forge by hand`;
+  `${p}: recipe ${recipe} reaches ${profile} through profile ${parent}, which it extends — forking it would edit ${parent}'s recipes, and no command writes a parent: only the Forge's maintainers change a parent's recipes, so ask them for a variant for this profile, or ${WAYS_OUT(p)}`;
 /** D24 (spec 54 §5.9): a hand edit of a file that comes from a parent's local. */
 const D24 = (p: string, ref: string, parent: string, profile: string, dir: string) =>
   `${p} comes from ${ref}, local to ${parent}, which ${profile} extends (${dir}) — no command writes a parent: edit it there by hand, then sync every workspace of the family`;
@@ -248,22 +252,22 @@ const D12_PARAM = (ing: string, key: string) =>
 const D13_EXISTS = (rel: string) => `${rel} already exists in the Forge — promote does not overwrite it`;
 const D13_IGNORED = (rel: string) => `${rel} is ignored by git — git could not show or undo it`;
 const D15 = (what: string) => `promote could not be proved for this workspace: ${what} — the Forge was left untouched`;
-const D16_OTHER_PROFILE = (wsPath: string, profile: string, changedPath: string) =>
-  `promote would change ${wsPath} (profile ${profile}): ${changedPath} — the Forge was left untouched`;
+const D16_OTHER_PROFILE = (wsPath: string, profile: string, changedPath: string, p: string) =>
+  `promote would change ${wsPath} (profile ${profile}): ${changedPath} — the Forge was left untouched; ${SHARED_WITH_PROFILES(p)}`;
 const D16_SAME_PROFILE_OUTSIDE = (wsPath: string, ingredient: string, changedPath: string) =>
   `promote would change ${wsPath} beyond ${ingredient}: ${changedPath} — the Forge was left untouched`;
 const D16_SAME_PROFILE_OVERRIDE = (wsPath: string, ingredient: string) =>
   `${wsPath} fills ${ingredient} from its own overrides — a variant would silently stop applying them there; the Forge was left untouched`;
 const D16_BREAK = (wsPath: string, profile: string, errMsg: string) =>
   `promote would break ${wsPath} (profile ${profile}): ${errMsg.split("\n")[0]} — the Forge was left untouched`;
-const D17 = (recipe: string, chain: string) =>
-  `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; re-import the workspace or edit the recipes by hand`;
+const D17 = (recipe: string, chain: string, p: string) =>
+  `recipe ${recipe} reaches this workspace through ${chain} — promote does not fork a recipe chain; the recipe is shared in the Forge, so only the Forge's maintainers change it: ask them for a variant for this profile, or ${WAYS_OUT(p)}`;
 const D18 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
   `${p} comes from recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)} — edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
 const D19 = (p: string, recipe: string, profile: string, slot: string, ref: string) =>
-  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)} and another profile also resolves — promote cannot fork a recipe a block selects; edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)} and another profile also resolves — promote cannot fork a recipe a block selects; the recipe is shared, so only the Forge's maintainers change it: edit ${ref} in a clone of the Forge and open a pull request there, or \`craftar drift discard ${p}\``;
 const D19_UNRESOLVED = (p: string, recipe: string, profile: string, slot: string, ref: string, other: string) =>
-  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)}, and profile ${other} does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile ${other}, edit ${ref} in the Forge, or \`craftar drift discard ${p}\``;
+  `${p} reaches this workspace through recipe ${recipe}, which profile ${profile} selects through ${slotLabel(slot)}, and profile ${other} does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile ${other}, edit ${ref} in a clone of the Forge and open a pull request there, or \`craftar drift discard ${p}\``;
 const INTERNAL_REUSE = (p: string) => `internal: ${p} is drift but the Forge already renders it — please report this`;
 interface OtherWorkspaceCheck {
   entries: ForgeWorkspace[];
@@ -416,6 +420,8 @@ async function checkOtherWorkspaces(
     baseCitedKeys: Set<string>;
     baseSectionNames: string[];
     ingKey: string;
+    /** The hand-edited path, as the person named it: the refusal's ways out name it. */
+    promotedPath: string;
   },
 ): Promise<{ state: RegistryState; rows: ImpactWorkspaceRow[]; warnings: string[] }> {
   const {
@@ -433,6 +439,7 @@ async function checkOtherWorkspaces(
     baseCitedKeys,
     baseSectionNames,
     ingKey,
+    promotedPath,
   } = opts;
 
   const fwResult = await forgeWorkspaces(home, forgeDir, env);
@@ -516,7 +523,7 @@ async function checkOtherWorkspaces(
 
     // D16 (other profile) — any change to another profile is refused
     if (otherProfile !== profile) {
-      throw new Error(D16_OTHER_PROFILE(fw.entry.path, otherProfile, firstChanged));
+      throw new Error(D16_OTHER_PROFILE(fw.entry.path, otherProfile, firstChanged, promotedPath));
     }
 
     // Same profile - check if the change is within allowed bounds
@@ -1004,7 +1011,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
   if (outcome === "variant-updated") {
     for (const [q] of forge.profiles) {
       if (q !== profile && resolvedBy(forge, q).has(variantRef)) {
-        throw new Error(D10(variantRef, q));
+        throw new Error(D10(variantRef, q, normalized));
       }
     }
   }
@@ -1076,6 +1083,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
       // For params/sections, the override check is not needed (the params/sections are going into the profile)
       // So we pass empty baseCitedKeys and baseSectionNames to skip the override check
       const impactResult = await checkOtherWorkspaces({
+        promotedPath: normalized,
         home,
         forgeDir,
         env,
@@ -1242,7 +1250,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         if (own === null) throw new Error(`${normalized}: profile ${profile} does not resolve on its own, so promote cannot tell whether ${R} is its own recipe — fix the profile, or edit the Forge by hand`);
         if (!own.has(R)) {
           const chain = (ws.config.recipes?.add ?? []).includes(R) ? "recipes.add (craftar.yaml)" : (findExtendsChain(forgeFor(forge, profile), p0.resolution.recipes, R) ?? R);
-          throw new Error(D17(R, chain));
+          throw new Error(D17(R, chain, normalized));
         }
         await repointLocalRecipe({ forgeDir, realForgeDir, stage, file: ownLocal.file, from: refToReplace, to: variantRef });
         editedKeys.set(ownLocal.file, ["ingredients"]);
@@ -1381,7 +1389,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
         } else {
           chain = R;
         }
-        throw new Error(D17(R, chain));
+        throw new Error(D17(R, chain, normalized));
       }
     }
   }
@@ -1441,6 +1449,7 @@ export async function planPromote(input: PromoteInput): Promise<PromotePlan> {
     // Impact: check for other workspaces (step 30h)
     const thisWsRealPath = await fs.realpath(root);
     const impactResult = await checkOtherWorkspaces({
+      promotedPath: normalized,
       home,
       forgeDir,
       env,

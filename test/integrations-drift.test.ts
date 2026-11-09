@@ -594,7 +594,7 @@ describe("promote and a recipe the block selects, shared with another profile", 
     const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--json"], { env });
 
     expect([r.code, r.stdout]).toEqual([1, ""]);
-    expect(r.stderr).toBe("error: .claude/rules/stories-azure-devops.md reaches this workspace through recipe pm-azure-devops, which profile acme selects through integrations.pm and another profile also resolves — promote cannot fork a recipe a block selects; edit rule/stories-azure-devops in the Forge, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n");
+    expect(r.stderr).toBe("error: .claude/rules/stories-azure-devops.md reaches this workspace through recipe pm-azure-devops, which profile acme selects through integrations.pm and another profile also resolves — promote cannot fork a recipe a block selects; the recipe is shared, so only the Forge's maintainers change it: edit rule/stories-azure-devops in a clone of the Forge and open a pull request there, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n");
 
     // Forge untouched
     expect(porcelain(s.forgeRoot)).toBe("");
@@ -649,7 +649,7 @@ describe("promote and a recipe the block selects, shared with another profile", 
     const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--json"], { env });
 
     expect([r.code, r.stdout]).toEqual([1, ""]);
-    expect(r.stderr).toBe("error: .claude/rules/stories-azure-devops.md reaches this workspace through recipe pm-azure-devops, which profile acme selects through integrations.pm and another profile also resolves — promote cannot fork a recipe a block selects; edit rule/stories-azure-devops in the Forge, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n");
+    expect(r.stderr).toBe("error: .claude/rules/stories-azure-devops.md reaches this workspace through recipe pm-azure-devops, which profile acme selects through integrations.pm and another profile also resolves — promote cannot fork a recipe a block selects; the recipe is shared, so only the Forge's maintainers change it: edit rule/stories-azure-devops in a clone of the Forge and open a pull request there, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n");
 
     // Forge untouched
     expect(porcelain(s.forgeRoot)).toBe("");
@@ -799,7 +799,7 @@ describe("promote and a recipe the block selects, shared with another profile", 
     const r = runCli(["drift", "promote", ".claude/rules/stories-azure-devops.md", "--workspace", s.wsRoot, "--json"], { env });
     expect([r.code, r.stdout]).toEqual([1, ""]);
     expect(r.stderr).toBe(
-      "error: .claude/rules/stories-azure-devops.md reaches this workspace through recipe pm-azure-devops, which profile acme selects through integrations.pm, and profile globex does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile globex, edit rule/stories-azure-devops in the Forge, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n",
+      "error: .claude/rules/stories-azure-devops.md reaches this workspace through recipe pm-azure-devops, which profile acme selects through integrations.pm, and profile globex does not resolve, so promote cannot tell whether it also uses it — promote cannot fork a recipe a block selects; fix profile globex, edit rule/stories-azure-devops in a clone of the Forge and open a pull request there, or `craftar drift discard .claude/rules/stories-azure-devops.md`\n",
     );
     expect(porcelain(s.forgeRoot)).toBe("");
   });
