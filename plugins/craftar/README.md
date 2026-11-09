@@ -12,7 +12,7 @@ Install `craftar` first. The plugin starts the `craftar` you installed and insta
 npm install -g craftar
 ```
 
-It needs Node 22 or later and `craftar` 0.40.1 or later. An older one, from 0.29.0, connects, but its `doctor` tool can run a repository's code: a `global.json` at the workspace root can make `dotnet --version` load an SDK the repository ships. The plugin cannot check the version, so keep `craftar` up to date. If `craftar` or `node` comes from asdf, volta or mise, read *If `craftar` comes from a version manager* below first.
+It needs Node 22 or later and `craftar` 0.40.1 or later. An older one, from 0.29.0, connects, but its `doctor` tool can run a repository's code: a `global.json` at the workspace root can make `dotnet --version` load an SDK the repository ships. The plugin cannot check the version, so keep `craftar` up to date. If `craftar` or `node` comes from nvm, asdf, volta or mise, read *If `craftar` and `node` come from nvm* or *If `craftar` comes from a version manager* below first.
 
 Then, in Claude Code:
 
@@ -21,11 +21,26 @@ Then, in Claude Code:
 /plugin install craftar@craftar
 ```
 
+## If `craftar` and `node` come from nvm
+
+Reported on Ubuntu with nvm, on 2026-11-09: nvm puts `craftar` and `node` on `PATH` from `~/.bashrc`, so only an interactive shell has them. A Claude Code started from a terminal finds them; one started from a desktop launcher, an app or a service may not, and then the server reads as failed. `craftar` starts with `#!/usr/bin/env node`, so `node` has to be on that `PATH` too.
+
+One way out is to link both into a directory on the `PATH` your session gets. On Ubuntu, `~/.profile` adds `~/.local/bin` at login when that directory exists:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s ~/.nvm/versions/node/<version>/bin/craftar ~/.local/bin/craftar
+ln -s ~/.nvm/versions/node/<version>/bin/node ~/.local/bin/node
+```
+
+The links point at one Node version: when nvm moves to another, make the links again. If `~/.local/bin` did not exist before, log out and back in.
+
 ## When the server reads as failed
 
 - **The project has no `craftar.yaml`.** The server refuses to start. No tool is offered and nothing is written, so this is harmless: the plugin simply has nothing to answer about there.
 - **The session was opened in a subfolder of a workspace.** The server is pointed at that subfolder, which has no `craftar.yaml`, and nothing walks up. Harmless for the same reason; open the session at the workspace root.
-- **`craftar` is not installed, or is older than 0.29.0.** Install or update it.
+- **A git worktree without its own `craftar.yaml`.** A session opened in a worktree of the workspace's repository reads the worktree, not the workspace; when its checkout holds no `craftar.yaml` (a branch that does not commit it, for instance), the server reads as failed the same way. Open the session in the workspace itself.
+- **`craftar` is not installed, or is older than 0.29.0, or is not on the `PATH` Claude Code was started with.** Install or update it; with nvm, see *If `craftar` and `node` come from nvm*.
 - **mise refused a project file you have not trusted.** See *If `craftar` comes from a version manager*.
 
 A Forge or a `craftar.lock` newer than the installed `craftar` is refused until `craftar` is updated.
