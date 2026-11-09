@@ -214,7 +214,7 @@ export async function statusDigest(ws: Workspace, statuses: FileStatus[]): Promi
  */
 export async function confirmWrites(io: Pick<InitIo, "confirm" | "say">): Promise<boolean> {
   for (;;) {
-    const answer = await io.confirm("Let craftar mcp --allow-writes write here [no]: ");
+    const answer = await io.confirm("Let craftar mcp --allow-writes write here? Type yes or no [no]: ");
     if (answer === null || answer.trim() === "") return false;
     const yn = yesNo(answer);
     if (yn !== null) return yn;

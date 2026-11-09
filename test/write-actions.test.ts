@@ -335,7 +335,7 @@ describe("statusDigest", () => {
 });
 
 describe("confirmWrites", () => {
-  const QUESTION = "Let craftar mcp --allow-writes write here [no]: ";
+  const QUESTION = "Let craftar mcp --allow-writes write here? Type yes or no [no]: ";
 
   /** A fake io that returns scripted answers and records questions and say calls. */
   function fakeIo(answers: Array<string | null>) {
