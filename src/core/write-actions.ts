@@ -209,12 +209,12 @@ export async function statusDigest(ws: Workspace, statuses: FileStatus[]): Promi
 /* ------------------------------------------------------------------ */
 
 /**
- * The question of `craftar mcp allow-writes` (spec 40 §5.2 step 4): `[no]` — Enter, n, no and an input that ended are no,
+ * The question of `craftar mcp allow-writes` (spec 40 §5.2 step 4), shown as `[yes/no]` since 1.10.1: Enter, n, no and an input that ended are no,
  * y and yes are yes (yesNo, the init flow's parser), anything else is asked again.
  */
 export async function confirmWrites(io: Pick<InitIo, "confirm" | "say">): Promise<boolean> {
   for (;;) {
-    const answer = await io.confirm("Let craftar mcp --allow-writes write here? Type yes or no [no]: ");
+    const answer = await io.confirm("Let craftar mcp --allow-writes write here [yes/no]: ");
     if (answer === null || answer.trim() === "") return false;
     const yn = yesNo(answer);
     if (yn !== null) return yn;
